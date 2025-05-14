@@ -31,7 +31,7 @@ class Encoder:
     async def reset_encoder(self):
         """Send a command to reset the encoder and await for confirmation."""
         command = {"action": "reset_encoder"}
-        await self.mcu_writes.put(command)
+        await self.mcu_writes.put_nowait(command)
         self.logger.log.info("Sent encoder reset command.")
 
         reset_confirmed = False

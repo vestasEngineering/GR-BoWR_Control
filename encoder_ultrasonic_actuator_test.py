@@ -60,6 +60,9 @@ async def actuator_sequence_controller(actuator: Actuator, encoder: Encoder, log
         - After the stage 1 transition (100cm), it sets actuator 0 to 0V and immediately sets actuator 1 to 5v
         - After the stage 2 transition (500cm), it sets actuator 1 to 0V and actuator 2 to 5v
     """
+    # Reset the encoder to 0
+    encoder.mcu_writes.put_nowait({"action": "reset_encoder"})
+
     try:
         #Set actuator 0 to 5.0v immediately 
         await actuator.set_actuator_voltage(0, 4.0)

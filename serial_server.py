@@ -30,6 +30,7 @@ class SerialServer():
         self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 1, 'voltage': 0})
         self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 2, 'voltage': 0})
 
+        self.mcu_writes.put_nowait({'reset_encoder': 0})
 
         self.mcu = None
 
