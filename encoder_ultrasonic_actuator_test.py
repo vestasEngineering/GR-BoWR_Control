@@ -18,18 +18,24 @@ async def ultrasonic_controller(ultrasonic: Ultrasonic):
             while not ultrasonic.distance_queue.empty():
                 distance = await ultrasonic.distance_queue.get()
 
-            #Process the measurment (bad readings are replaced by the setpoint)
-            ultrasonic.current_distance = ultrasonic.ignore_bad_measurements(distance)
+            if distance == 40:
+                ultrasonic.process_speed = 0.0
+                ultrasonic.current_speed = 0.0
+                print("Invald measurement detected (40). Setting motor speed to 0.")
 
-            #If within the deadband, no correction is needed; otherwise run PID
-            lower, upper = ultrasonic.correction_deadband
-            if lower < ultrasonic.current_distance <= upper:
-                u = 0
             else:
-                u = ultrasonic.pid(ultrasonic.current_distance)
+                #Process the measurment (bad readings are replaced by the setpoint)
+                ultrasonic.current_distance = ultrasonic.ignore_bad_measurements(distance)
 
-            ultrasonic.process_speed = round(max(ultrasonic.current_speed + u, 0), 4)
-            ultrasonic.current_speed = ultrasonic.process_speed
+                #If within the deadband, no correction is needed; otherwise run PID
+                lower, upper = ultrasonic.correction_deadband
+                if lower < ultrasonic.current_distance <= upper:
+                    u = 0
+                else:
+                    u = ultrasonic.pid(ultrasonic.current_distance)
+
+                ultrasonic.process_speed = round(max(ultrasonic.current_speed + u, 0), 4)
+                ultrasonic.current_speed = ultrasonic.process_speed
 
             #Publish drive motor speed commands
             await ultrasonic.mcu_writes.put({"speed0": -1.0 * float(ultrasonic.process_speed)})
@@ -65,7 +71,7 @@ async def actuator_sequence_controller(actuator: Actuator, encoder: Encoder, log
 
     try:
         #Set actuator 0 to 5.0v immediately 
-        await actuator.set_actuator_voltage(0, 4.0)
+        await actuator.set_actuator_voltage(0, 5.0)
 
         #Flags to ensure each stage is triggered only once.
         stage1_triggered = False
@@ -78,17 +84,17 @@ async def actuator_sequence_controller(actuator: Actuator, encoder: Encoder, log
             logger.log.info(F"Current encoder position: {pos}")
 
             #When the encoder surpasses 100, trigger stage 1. 
-            if not stage1_triggered and pos >=100:
+            if not stage1_triggered and pos >=2500:
                 stage1_triggered = True
                 logger.log.info("Encoder threshold 100 reached: Activating actuator 1 and deactivating actuator 0.")
-                await actuator.set_actuator_voltage(1, 4.0)
+                await actuator.set_actuator_voltage(1, 5.0)
                 asyncio.create_task(actuator.delayed_actuator_voltage(0, 0.0, 9))
 
             #When the encoder surpasses 500, trigger stage 2.
-            if not stage2_triggered and pos >= 500:
+            if not stage2_triggered and pos >= 4000:
                 stage2_triggered = True
                 logger.log.info("Encoder threshold 500 reached: Activating actuator 2 and deactivating actuator 1.")
-                await actuator.set_actuator_voltage(2, 4.0)
+                await actuator.set_actuator_voltage(2, 5.0)
                 asyncio.create_task(actuator.delayed_actuator_voltage(1, 0.0, 9))
 
 

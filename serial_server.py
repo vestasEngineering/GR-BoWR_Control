@@ -26,10 +26,9 @@ class SerialServer():
         self.mcu_writes.put_nowait({"speed3":        float(0.0)})
 
         # Initialize actuators
-        self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 0, 'voltage': 0})
+        self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 0, 'voltage': 4})
         self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 1, 'voltage': 0})
         self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 2, 'voltage': 0})
-
         self.mcu_writes.put_nowait({'reset_encoder': 0})
 
         self.mcu = None

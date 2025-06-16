@@ -8,6 +8,7 @@ from encoder import Encoder
 #from motor_test import MotorTest
 from actuator_JSON import Actuator
 from encoder_ultrasonic_actuator_test import ultrasonic_controller, actuator_sequence_controller
+#from ultrasonic_actuator_test import ultrasonic_controller, actuator_sequence_controller
 import asyncio 
 
 class Grlrr():
@@ -64,7 +65,7 @@ class Grlrr():
           
             case 'set_speed':
                 print('set speed')
-                #self.ultrasonic.process_speed = param
+                self.ultrasonic.process_speed = param
          
             case 'start_process':
                 print('started process')
@@ -85,7 +86,7 @@ class Grlrr():
                 )
 
             case 'stop_process':
-                print('stopped process')
+                print('stopped process')              
                 #self.ultrasonic_task.cancel()
                 #self.motor_test_task.cancel()
                 #self.actuator_test_task.cancel()
@@ -93,6 +94,7 @@ class Grlrr():
                 for task in self.integration_tasks:
                     task.cancel()
                 self.integration_tasks.clear()
+
 
             case None:
                 return

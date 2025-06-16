@@ -34,7 +34,7 @@ class Ultrasonic():
         # ultrasonic pid
         self.pid = PID(Kp=self.p, Ki=self.i, Kd=self.d, setpoint=self.set_point)
         self.pid.sample_time = 0.05 # seconds
-        self.pid.setpoint = 95 # mm
+        self.pid.setpoint = 125 # mm
         self.lower_limit = self.pid.setpoint - self.tolerance
         self.upper_limit = self.pid.setpoint + self.tolerance
         self.correction_deadband = (self.lower_limit, self.upper_limit)

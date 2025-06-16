@@ -4,7 +4,7 @@ from ultrasonic import Ultrasonic
 from logger import Logger
 from queues import Queues
 
-async def ultrasonic_controller(ultrasonic: Ultrasonic, first_valid_event: asyncio.Event):
+async def ultrasonic_controller(ultrasonic: Ultrasonic):
     """
     Runs the ultrasonic sensor loop. It continuously waits on distance measurements from its queue,
     uses them to update the PID control for the drive motor speeds, and publishes speed commands.
@@ -17,23 +17,24 @@ async def ultrasonic_controller(ultrasonic: Ultrasonic, first_valid_event: async
             while not ultrasonic.distance_queue.empty():
                 distance = await ultrasonic.distance_queue.get()
 
-            #Check if this measurment is valid (range 45 to 200mm)
-            if not first_valid_event.is_set() and 50 < distance < 100:
-                first_valid_event.set()
-                ultrasonic.logger.log.info(f"First valid ultrasonic measurement received: {distance} mm")
+            if distance == 40:
+                ultrasonic.process_speed = 0.0
+                ultrasonic.current_speed = 0.0
+                print("Invald measurement detected (40). Setting motor speed to 0.")
 
-            #Process the measurment (bad readings are replaced by the setpoint)
-            ultrasonic.current_distance = ultrasonic.ignore_bad_measurements(distance)
-
-            #If within the deadband, no correction is needed; otherwise run PID
-            lower, upper = ultrasonic.correction_deadband
-            if lower < ultrasonic.current_distance <= upper:
-                u = 0
             else:
-                u = ultrasonic.pid(ultrasonic.current_distance)
+                #Process the measurment (bad readings are replaced by the setpoint)
+                ultrasonic.current_distance = ultrasonic.ignore_bad_measurements(distance)
 
-            ultrasonic.process_speed = round(max(ultrasonic.current_speed + u, 0), 4)
-            ultrasonic.current_speed = ultrasonic.process_speed
+                #If within the deadband, no correction is needed; otherwise run PID
+                lower, upper = ultrasonic.correction_deadband
+                if lower < ultrasonic.current_distance <= upper:
+                    u = 0
+                else:
+                    u = ultrasonic.pid(ultrasonic.current_distance)
+
+                ultrasonic.process_speed = round(max(ultrasonic.current_speed + u, 0), 4)
+                ultrasonic.current_speed = ultrasonic.process_speed
 
             #Publish drive motor speed commands
             await ultrasonic.mcu_writes.put({"speed0": -1.0 * float(ultrasonic.process_speed)})
@@ -42,16 +43,19 @@ async def ultrasonic_controller(ultrasonic: Ultrasonic, first_valid_event: async
             await ultrasonic.mcu_writes.put({"speed3": float(ultrasonic.process_speed)})
 
             await asyncio.sleep(0.1)
+
     except asyncio.CancelledError:
+        ultrasonic.logger.log.info("Ultrasonic controller cancelled")
+
+        #Send STOP command to the MCU
+        ultrasonic.mcu_writes.put_nowait({"action": "STOP"})
+
+        #On cancellation, send zero speed commands to all drive motors.
         ultrasonic.mcu_writes.put_nowait({"speed0": -1.0 *  float(0.0)})
         ultrasonic.mcu_writes.put_nowait({"speed1": -1.0 *  float(0.0)})
         ultrasonic.mcu_writes.put_nowait({"speed2":        float(0.0)})
         ultrasonic.mcu_writes.put_nowait({"speed3":        float(0.0)})
-    except asyncio.CancelledError:
-        ultrasonic.logger.log.info("Ultrasonic controller cancelled")
-        #On cancellation, send zero speed commands to all drive motors.
-        for key in ["speed0", "speed1", "speed2", "speed3"]:
-            await ultrasonic.mcu_writes.put({key: 0.0})
+
     except Exception as e:
         ultrasonic.logger.log.error(f"Error in ultrasonic controller: {e}")
 
