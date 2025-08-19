@@ -17,19 +17,31 @@ class SerialServer():
         self.feedback_reads = queues.feedbackSignals
         self.encoder_distance = queues.encoder_distance
 
-
         # self.mcu_writes.put_nowait({"msgtyp": "get", "device":"?", "motorSpeed":0})
         self.mcu_writes.put_nowait({"start_serial":      1})
-        self.mcu_writes.put_nowait({"speed0": -1.0 * float(0.0)})
-        self.mcu_writes.put_nowait({"speed1": -1.0 * float(0.0)})
-        self.mcu_writes.put_nowait({"speed2":        float(0.0)})
-        self.mcu_writes.put_nowait({"speed3":        float(0.0)})
+        self.mcu_writes.put({
+            "speed0": 0,
+            "speed1": 0,
+            "speed2":  0,
+            "speed3":  0
+        })
 
         # Initialize actuators
-        self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 0, 'voltage': 4})
+        self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 0, 'voltage': 0})
         self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 1, 'voltage': 0})
         self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 2, 'voltage': 0})
-        self.mcu_writes.put_nowait({'reset_encoder': 0})
+        self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 3, 'voltage': 0})
+
+        
+        #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 0})
+        #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 1})
+        #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 2})
+
+        self.mcu_writes.put_nowait({'action': 'reset_encoder'})
+        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 0, "activate": 0, "deactivate": 2, "delay": 0}]})
+        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 300, "activate": 1, "deactivate": 0, "delay": 9}]})
+        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 600, "activate": 2, "deactivate": 1, "delay": 9}]})
+
 
         self.mcu = None
 
@@ -53,7 +65,7 @@ class SerialServer():
     def connect_serial(self, available_ports):
         try:
             connected_device = serial.Serial(
-                available_ports[0], 115200, timeout=10.00)
+                available_ports[0], 115200, timeout=10.0)
 
             if connected_device.isOpen():
                 self.logger.log.info("serial connected to "+str(available_ports[0]))
@@ -102,13 +114,13 @@ class SerialServer():
     async def send(self):
         while True:
             msg = await self.mcu_writes.get()
-
             self.logger.log.info(f"Sending: {msg}")
-
             try:
-                self.mcu.write(('<'+json.dumps(msg)+'>').encode('ascii'))
+                self.mcu.write(('<' + json.dumps(msg) + '>').encode('ascii'))
             except Exception as e:
                 self.logger.log.error(f"Error sending data: {e}")
+            await asyncio.sleep(0.01)  # Add a short delay to prevent busy-waiting
+
 
     async def hb(self):
         while True:
@@ -123,8 +135,13 @@ class SerialServer():
     async def receive(self):
         while True:
             try:
-                line = self.mcu.readline().decode('ascii').strip()
-                #self.logger.log.info(f"Raw serial line: {line}")
+                line = await asyncio.to_thread(self.mcu.readline)
+                line = line.decode('ascii').strip()
+
+                if not line.startswith("{"):
+                    self.logger.log.warning(f"Ignoring non-JSON line: {line}")
+                    continue
+
                 msg_dict = json.loads(line)
 
                 # Debug log the received message
@@ -143,12 +160,24 @@ class SerialServer():
                 # Handle encoder position updates
                 if 'encoder_distance' in msg_dict:
                     await self.encoder_distance.put(msg_dict['encoder_distance'])
-                    self.logger.log.info(f"Encoder Position: {msg_dict['encoder_distance']}")
+                    #self.logger.log.info(f"Encoder Position: {msg_dict['encoder_distance']}")
 
                 # Handle encoder reset confirmation
-                if 'status' in msg_dict and msg_dict['status'] == "Encoder Reset":
+                if msg_dict.get('status', '').lower() == "encoder reset":
                     await self.encoder_distance.put(msg_dict)
                     self.logger.log.info("Encoder successfully reset.")
+
+                # Handle light state confirmation
+                if msg_dict.get('status', '').lower() == "light_updated":
+                    self.logger.log.info(f"Andon light updated to: {msg_dict.get('state')}")
+      
+                if msg_dict.get("trigger_reached"):
+                    self.logger.log.info(f"Trigger reached on channel {msg_dict['channel']} at value {msg_dict['value']}")
+
+                if msg_dict.get("trigger_deactivated"):
+                    self.logger.log.info(f"Trigger deactivated on channel {msg_dict['channel']}")
+
+
                     
             except json.JSONDecodeError as e:
                 self.logger.log.error(f"JSON decode error: {e} - Raw data: {line}")

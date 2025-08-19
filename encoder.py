@@ -21,6 +21,12 @@ class Encoder:
             self.current_encoder_value = await asyncio.wait_for(self.encoder_queue.get(), timeout=2.0)
             if self.current_encoder_value is None:
                 self.current_encoder_value = 0
+
+            if isinstance(self.current_encoder_value, dict):
+                return self.current_encoder_value.get("encoder_distance", 0)
+            
+            return self.current_encoder_value
+        
         except asyncio.TimeoutError:
             self.logger.log.error("Timeout waiting for encoder reading.")
             self.current_encoder_value = 0

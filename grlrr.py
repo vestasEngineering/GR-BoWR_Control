@@ -7,7 +7,7 @@ from ultrasonic import Ultrasonic
 from encoder import Encoder
 #from motor_test import MotorTest
 from actuator_JSON import Actuator
-from encoder_ultrasonic_actuator_test import ultrasonic_controller, actuator_sequence_controller
+from actuator_encoder import actuator_sequence_controller
 #from ultrasonic_actuator_test import ultrasonic_controller, actuator_sequence_controller
 import asyncio 
 
@@ -72,21 +72,23 @@ class Grlrr():
                 #self.ultrasonic_task = self.event_loop.create_task(self.ultrasonic.run())
                 #self.motor_test_task = self.event_loop.create_task(self.motor_test.test_motors())
                 #self.actuator_test_task = self.event_loop.create_task(self.actuator.test_actuators())
-                
-                #Reset the speed to 0.0 before starting
+                self.ss.mcu_writes.put_nowait({'action': 'set_light', 'state': 'BLINK_GREEN'})
+
                 self.ultrasonic.process_speed = 0.0
                 self.ultrasonic.current_speed = 0.0
 
                 self.integration_tasks.append(
-                    self.event_loop.create_task(ultrasonic_controller(self.ultrasonic))
+                    self.event_loop.create_task(self.ultrasonic.run())
                 )
-                self.integration_tasks.append(
-                    self.event_loop.create_task(actuator_sequence_controller(self.actuator, self.encoder, self.logger))
-                    #self.event_loop.create_task(actuator_sequence_controller(self.actuator, self.first_valid_event, self.logger))
-                )
+                #self.integration_tasks.append(
+                #    self.event_loop.create_task(actuator_sequence_controller(self.actuator, self.encoder, self.logger))
+                #)
+
 
             case 'stop_process':
-                print('stopped process')              
+                print('stopped process')
+                self.ss.mcu_writes.put_nowait({'action': 'set_light', 'state': 'GREEN'})
+              
                 #self.ultrasonic_task.cancel()
                 #self.motor_test_task.cancel()
                 #self.actuator_test_task.cancel()
