@@ -1,7 +1,6 @@
 # queues.py
 import asyncio
 
-
 class Queues():
     def __init__(self):
         self.distance = asyncio.Queue(10)
