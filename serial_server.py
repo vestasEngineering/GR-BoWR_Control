@@ -19,11 +19,11 @@ class SerialServer():
 
         # self.mcu_writes.put_nowait({"msgtyp": "get", "device":"?", "motorSpeed":0})
         self.mcu_writes.put_nowait({"start_serial":      1})
-        self.mcu_writes.put({
+        self.mcu_writes.put_nowait({
             "speed0": 0,
             "speed1": 0,
-            "speed2":  0,
-            "speed3":  0
+            "speed2": 0,
+            "speed3": 0
         })
 
         # Initialize actuators
@@ -31,7 +31,6 @@ class SerialServer():
         self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 1, 'voltage': 0})
         self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 2, 'voltage': 0})
         self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 3, 'voltage': 0})
-
         
         #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 0})
         #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 1})
@@ -41,7 +40,6 @@ class SerialServer():
         self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 0, "activate": 0, "deactivate": 2, "delay": 0}]})
         self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 300, "activate": 1, "deactivate": 0, "delay": 9}]})
         self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 600, "activate": 2, "deactivate": 1, "delay": 9}]})
-
 
         self.mcu = None
 

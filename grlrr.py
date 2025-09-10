@@ -3,12 +3,6 @@ from log_server import LogServer
 from queues import Queues
 from websocket_server import WebsocketServer
 from serial_server import SerialServer
-from ultrasonic import Ultrasonic
-from encoder import Encoder
-#from motor_test import MotorTest
-from actuator_JSON import Actuator
-from actuator_encoder import actuator_sequence_controller
-#from ultrasonic_actuator_test import ultrasonic_controller, actuator_sequence_controller
 import asyncio 
 
 class Grlrr():
@@ -19,11 +13,6 @@ class Grlrr():
         self.log_server = LogServer(logger=self.logger)
         self.wss = WebsocketServer(logger=self.logger, queues=self.qs)
         self.ss = SerialServer(logger=self.logger, queues=self.qs)
-        self.ultrasonic = Ultrasonic(logger=self.logger, queues=self.qs)
-        #self.motor_test = MotorTest(logger=self.logger, queues=self.qs)
-        self.actuator = Actuator(logger=self.logger, queues=self.qs)
-        self.encoder = Encoder(logger=self.logger, queues=self.qs)
-
 
         self.logger.log.info("grlrr init")
         self.cmd = 'initialize_robot'
@@ -39,7 +28,6 @@ class Grlrr():
         self.logger.log.info('grlrr setup')
         self.event_loop.create_task(self.wss.run())
         self.event_loop.create_task(self.ss.run())
-        #self.ultrasonic_task = self.event_loop.create_task(self.ultrasonic.run())
 
 
     def get_command(self):
@@ -65,38 +53,15 @@ class Grlrr():
           
             case 'set_speed':
                 print('set speed')
-                self.ultrasonic.process_speed = param
+                #self.ss.mcu_writes.put_nowait({'action': 'set_speed', 'speed': '' ,})
          
             case 'start_process':
                 print('started process')
-                #self.ultrasonic_task = self.event_loop.create_task(self.ultrasonic.run())
-                #self.motor_test_task = self.event_loop.create_task(self.motor_test.test_motors())
-                #self.actuator_test_task = self.event_loop.create_task(self.actuator.test_actuators())
-                self.ss.mcu_writes.put_nowait({'action': 'set_light', 'state': 'BLINK_GREEN'})
-
-                self.ultrasonic.process_speed = 0.0
-                self.ultrasonic.current_speed = 0.0
-
-                self.integration_tasks.append(
-                    self.event_loop.create_task(self.ultrasonic.run())
-                )
-                #self.integration_tasks.append(
-                #    self.event_loop.create_task(actuator_sequence_controller(self.actuator, self.encoder, self.logger))
-                #)
-
+                self.ss.mcu_writes.put_nowait({'action': 'start_process',})
 
             case 'stop_process':
                 print('stopped process')
-                self.ss.mcu_writes.put_nowait({'action': 'set_light', 'state': 'GREEN'})
-              
-                #self.ultrasonic_task.cancel()
-                #self.motor_test_task.cancel()
-                #self.actuator_test_task.cancel()
-                
-                for task in self.integration_tasks:
-                    task.cancel()
-                self.integration_tasks.clear()
-
+                self.ss.mcu_writes.put_nowait({'action': 'stop_process',})
 
             case None:
                 return

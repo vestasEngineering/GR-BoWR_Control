@@ -15,7 +15,7 @@ async def actuator_sequence_controller(actuator: Actuator, encoder: Encoder, log
 
     try:
         #Set actuator 0 to 5.0v immediately 
-        await actuator.set_actuator_voltage(0, 5.0)
+        await actuator.set_actuator_voltage(0, 2.0)
 
         #Flags to ensure each stage is triggered only once.
         stage1_triggered = False
@@ -31,14 +31,14 @@ async def actuator_sequence_controller(actuator: Actuator, encoder: Encoder, log
             if not stage1_triggered and pos >=300:
                 stage1_triggered = True
                 logger.log.info("Encoder threshold 100 reached: Activating actuator 1 and deactivating actuator 0.")
-                await actuator.set_actuator_voltage(1, 5.0)
+                await actuator.set_actuator_voltage(1, 2.0)
                 asyncio.create_task(actuator.delayed_actuator_voltage(0, 0.0, 9))
 
             #When the encoder surpasses 500, trigger stage 2.
             if not stage2_triggered and pos >= 600:
                 stage2_triggered = True
                 logger.log.info("Encoder threshold 500 reached: Activating actuator 2 and deactivating actuator 1.")
-                await actuator.set_actuator_voltage(2, 5.0)
+                await actuator.set_actuator_voltage(2, 2.0)
                 asyncio.create_task(actuator.delayed_actuator_voltage(1, 0.0, 9))
 
 
