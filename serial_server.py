@@ -96,28 +96,28 @@ class SerialServer():
         self.mcu.reset_input_buffer()
         self.mcu.reset_output_buffer()
 
+
     async def run(self):
         self.mcu = self.connect_serial(self.detect_serial())
         if self.mcu:
             self.clear_serial()
-
-            #Temporarily removed the heartbeat message.
-            await asyncio.gather(self.send(), self.receive())
-
-            #await asyncio.gather(self.send(), self.receive(), self.hb())
+            self.send_task = asyncio.create_task(self.send())
+            self.receive_task = asyncio.create_task(self.receive())
+            await asyncio.gather(self.send_task, self.receive_task)
         else:
             self.logger.log.info("Unable to connect to serial device. Exiting...")
             quit()
 
+
     async def send(self):
-        while True:
-            msg = await self.mcu_writes.get()
-            self.logger.log.info(f"Sending: {msg}")
-            try:
+        try:
+            while True:
+                msg = await self.mcu_writes.get()
+                self.logger.log.info(f"Sending: {msg}")
                 self.mcu.write(('<' + json.dumps(msg) + '>').encode('ascii'))
-            except Exception as e:
-                self.logger.log.error(f"Error sending data: {e}")
-            await asyncio.sleep(0.01)  # Add a short delay to prevent busy-waiting
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            self.logger.log.info("Send task cancelled.")
 
 
     async def hb(self):
@@ -130,55 +130,88 @@ class SerialServer():
     #        await self.distance.put(msg_dict['distance'])
 
 
-    async def receive(self):
-        while True:
+    async def send_shutdown(self):
+            if self.mcu:
+                self.logger.log.info("Sending shutdown command to H7...")
+                try:
+                    self.mcu.write(('<' + json.dumps({"action": "shutdown"}) + '>').encode('ascii'))
+                    await asyncio.sleep(0.5)  # Give H7 time to respond
+                except Exception as e:
+                    self.logger.log.error(f"Error sending shutdown: {e}")
+
+
+    def close_serial(self):
+        if self.mcu:
             try:
-                line = await asyncio.to_thread(self.mcu.readline)
-                line = line.decode('ascii').strip()
-
-                if not line.startswith("{"):
-                    self.logger.log.warning(f"Ignoring non-JSON line: {line}")
-                    continue
-
-                msg_dict = json.loads(line)
-
-                # Debug log the received message
-                #self.logger.log.info(f"Received: {msg_dict}")
-                
-                # Handle distance sensor updates
-                if 'distance' in msg_dict:
-                    await self.distance.put(msg_dict['distance'])
-                    self.logger.log.info(f"New sensor distance: {msg_dict['distance']}")
-
-                # Handle actuator feedback updates
-                if 'feedback' in msg_dict:
-                    await self.feedback_reads.put(msg_dict['feedback'])
-                    self.logger.log.info(f"Actuator {msg_dict['channel']} feedback: {msg_dict['feedback']}")
-
-                # Handle encoder position updates
-                if 'encoder_distance' in msg_dict:
-                    await self.encoder_distance.put(msg_dict['encoder_distance'])
-                    #self.logger.log.info(f"Encoder Position: {msg_dict['encoder_distance']}")
-
-                # Handle encoder reset confirmation
-                if msg_dict.get('status', '').lower() == "encoder reset":
-                    await self.encoder_distance.put(msg_dict)
-                    self.logger.log.info("Encoder successfully reset.")
-
-                # Handle light state confirmation
-                if msg_dict.get('status', '').lower() == "light_updated":
-                    self.logger.log.info(f"Andon light updated to: {msg_dict.get('state')}")
-      
-                if msg_dict.get("trigger_reached"):
-                    self.logger.log.info(f"Trigger reached on channel {msg_dict['channel']} at value {msg_dict['value']}")
-
-                if msg_dict.get("trigger_deactivated"):
-                    self.logger.log.info(f"Trigger deactivated on channel {msg_dict['channel']}")
-
-
-                    
-            except json.JSONDecodeError as e:
-                self.logger.log.error(f"JSON decode error: {e} - Raw data: {line}")
+                self.mcu.reset_input_buffer()
+                self.mcu.reset_output_buffer()
+                self.mcu.close()
+                self.logger.log.info("Serial connection closed.")
             except Exception as e:
-                self.logger.log.error(f"Error parsing serial data: {e} - Raw data: {line}")
-            await asyncio.sleep(0)
+                self.logger.log.error(f"Error closing serial: {e}")
+
+
+    async def shutdown(self):
+        self.logger.log.info("SerialServer shutting down...")
+
+        try:
+            await self.mcu_writes.put({"action": "shutdown"})
+            await asyncio.sleep(0.5)
+
+            if self.send_task:
+                self.send_task.cancel()
+            if self.receive_task:
+                self.receive_task.cancel()
+
+            if self.mcu and self.mcu.is_open:
+                self.mcu.reset_input_buffer()
+                self.mcu.reset_output_buffer()
+                self.mcu.close()
+                self.logger.log.info("Serial port closed.")
+        except Exception as e:
+            self.logger.log.error(f"Error during SerialServer shutdown: {e}")
+
+
+    async def receive(self):
+        try:
+            while True:
+                if not self.mcu or not self.mcu.is_open:
+                    self.logger.log.info("Serial port is closed. Exiting receive loop.")
+                    break  # Exit the loop cleanly
+
+                try:
+                    line = await asyncio.to_thread(self.mcu.readline)
+                    line = line.decode('ascii').strip()
+
+                    if not line.startswith("{"):
+                        self.logger.log.warning(f"Ignoring non-JSON line: {line}")
+                        continue
+
+                    msg_dict = json.loads(line)
+
+                    # Handle known message types
+                    if 'distance' in msg_dict:
+                        await self.distance.put(msg_dict['distance'])
+                    elif 'feedback' in msg_dict:
+                        await self.feedback_reads.put(msg_dict['feedback'])
+                    elif 'encoder_distance' in msg_dict:
+                        await self.encoder_distance.put(msg_dict['encoder_distance'])
+                    elif msg_dict.get('status', '').lower() == "encoder reset":
+                        await self.encoder_distance.put(msg_dict)
+                    elif msg_dict.get('status', '').lower() == "light_updated":
+                        self.logger.log.info(f"Andon light updated to: {msg_dict.get('state')}")
+                    elif msg_dict.get("trigger_reached"):
+                        self.logger.log.info(f"Trigger reached on channel {msg_dict['channel']} at value {msg_dict['value']}")
+                    elif msg_dict.get("trigger_deactivated"):
+                        self.logger.log.info(f"Trigger deactivated on channel {msg_dict['channel']}")
+                    elif msg_dict.get("status", "").lower() == "shutdown_complete":
+                        self.logger.log.info("Shutdown confirmed by H7.")
+
+                except json.JSONDecodeError as e:
+                    self.logger.log.error(f"JSON decode error: {e} - Raw data: {line}")
+                except Exception as e:
+                    self.logger.log.error(f"Error parsing serial data: {e} - Raw data: {line}")
+
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            self.logger.log.info("Receive task cancelled.")

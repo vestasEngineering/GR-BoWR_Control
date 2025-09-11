@@ -3,7 +3,9 @@ from log_server import LogServer
 from queues import Queues
 from websocket_server import WebsocketServer
 from serial_server import SerialServer
-import asyncio 
+import asyncio
+import signal
+import sys
 
 class Grlrr():
     def __init__(self):
@@ -19,6 +21,25 @@ class Grlrr():
 
         #Task tracking
         self.integration_tasks = []
+
+        # Register signal handler
+        signal.signal(signal.SIGINT, self.teardown)
+
+
+    async def teardown(self):
+        self.logger.log.info("SIGINT received. Shutting down...")
+
+        # Cancel main loop
+        if hasattr(self, 'loop_task'):
+            self.loop_task.cancel()
+            self.logger.log.info("Main loop cancelled.")
+
+        # Shutdown serial server
+        await self.ss.shutdown()
+   
+        # Final exit
+        self.logger.log.info("Teardown complete. Exiting process.")
+        sys.exit(0)
 
 
     def setup(self):
@@ -81,19 +102,17 @@ class Grlrr():
 
     async def loop(self):
         start_time = self.event_loop.time()
-        while True:
-            
-            self.update_state()
-            #print('main loop')
-            ##start = self.event_loop.time()
-            #self.qs.show_queue_size()
-            self.logger.log.debug(self.event_loop.time()-start_time)
-
-            self.logger.log.debug('main')
-            await asyncio.sleep(0)
-            #print('duration: ', str(self.event_loop.time()-start))
+        try:
+            while True:
+                self.update_state()
+                self.logger.log.debug(self.event_loop.time() - start_time)
+                self.logger.log.debug('main')
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            self.logger.log.info("Main loop cancelled.")
 
 
     async def main(self):
-        self.setup()
+        self.setup() 
+        self.loop_task = asyncio.create_task(self.loop())
         await self.loop()
