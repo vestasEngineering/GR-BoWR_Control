@@ -41,6 +41,23 @@ class Grlrr():
         self.logger.log.info("Teardown complete. Exiting process.")
         sys.exit(0)
 
+    async def cli_listener(self):
+        while True:
+            command = await asyncio.to_thread(input, "Enter command: ")
+            command = command.strip().lower()
+
+            if command == "start":
+                await self.qs.commands.put({'start_process': 1})
+            elif command == "stop":
+                await self.qs.commands.put({'stop_process': 1})
+            elif command == "exit":
+                self.logger.log.info("Exit command received.")
+                self.wss.shutdown_event.set()
+                await self.teardown()
+                break
+            else:
+                print(f"Unknown command: {command}")
+
 
     def setup(self):
         self.qs.commands.put_nowait({'initialize_robot':1})
@@ -113,6 +130,7 @@ class Grlrr():
 
 
     async def main(self):
-        self.setup() 
-        self.loop_task = asyncio.create_task(self.loop())
-        await self.loop()
+            self.setup()
+            self.loop_task = asyncio.create_task(self.loop())
+            cli_task = asyncio.create_task(self.cli_listener())
+            await asyncio.gather(self.loop_task, cli_task)

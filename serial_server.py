@@ -37,9 +37,11 @@ class SerialServer():
         #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 2})
 
         self.mcu_writes.put_nowait({'action': 'reset_encoder'})
-        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 0, "activate": 0, "deactivate": 2, "delay": 0}]})
-        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 300, "activate": 1, "deactivate": 0, "delay": 9}]})
-        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 600, "activate": 2, "deactivate": 1, "delay": 9}]})
+        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 0, "activate": 0, "deactivate": 3, "delay": 0}]})
+        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 1150, "activate": 1, "deactivate": 0, "delay": 9}]})
+        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 2300, "activate": 2, "deactivate": 1, "delay": 9}]})
+        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 3450, "activate": 3, "deactivate": 2, "delay": 9}]})
+
 
         self.mcu = None
 
