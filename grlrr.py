@@ -3,6 +3,7 @@ from log_server import LogServer
 from queues import Queues
 from websocket_server import WebsocketServer
 from serial_server import SerialServer
+from april_tag_detector import AprilTagDetector
 import asyncio
 import signal
 import sys
@@ -15,6 +16,8 @@ class Grlrr():
         self.log_server = LogServer(logger=self.logger)
         self.wss = WebsocketServer(logger=self.logger, queues=self.qs)
         self.ss = SerialServer(logger=self.logger, queues=self.qs)
+
+        self.detector = AprilTagDetector(queues=self.qs, rtsp_url="rtsp://vestas:vestasvestas@192.168.8.164:554/stream1")
 
         self.logger.log.info("grlrr init")
         self.cmd = 'initialize_robot'
@@ -41,6 +44,7 @@ class Grlrr():
         self.logger.log.info("Teardown complete. Exiting process.")
         sys.exit(0)
 
+    '''
     async def cli_listener(self):
         while True:
             command = await asyncio.to_thread(input, "Enter command: ")
@@ -50,6 +54,8 @@ class Grlrr():
                 await self.qs.commands.put({'start_process': 1})
             elif command == "stop":
                 await self.qs.commands.put({'stop_process': 1})
+            elif command == "reset":
+                await self.qs.commands.put({'reset_motors': 1})
             elif command == "exit":
                 self.logger.log.info("Exit command received.")
                 self.wss.shutdown_event.set()
@@ -57,7 +63,7 @@ class Grlrr():
                 break
             else:
                 print(f"Unknown command: {command}")
-
+    '''
 
     def setup(self):
         self.qs.commands.put_nowait({'initialize_robot':1})
@@ -66,6 +72,7 @@ class Grlrr():
         self.logger.log.info('grlrr setup')
         self.event_loop.create_task(self.wss.run())
         self.event_loop.create_task(self.ss.run())
+        self.event_loop.create_task(self.detector.run())
 
 
     def get_command(self):
@@ -132,5 +139,6 @@ class Grlrr():
     async def main(self):
             self.setup()
             self.loop_task = asyncio.create_task(self.loop())
-            cli_task = asyncio.create_task(self.cli_listener())
-            await asyncio.gather(self.loop_task, cli_task)
+            await asyncio.gather(self.loop_task)
+            #cli_task = asyncio.create_task(self.cli_listener())
+            #await asyncio.gather(self.loop_task, self.cli_listener())
