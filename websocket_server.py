@@ -15,10 +15,7 @@ from robot_list import (
 class WebsocketServer():
     def __init__(self, logger:Logger, queues:Queues):
         self.logger = logger
-        #self.images = queues.images
         self.commands = queues.commands
-        #self.angles    = queues.angles
-        #self.offsets   = queues.offsets
         self.responses = queues.responses
         self.mcu_reads = queues.mcu_reads
         self.mcu_writes = queues.mcu_writes
@@ -47,12 +44,8 @@ class WebsocketServer():
             rid, bid = get_defaults(self.robot_data)
             vals = get_transitions(self.robot_data, rid, bid)
             thresholds = thresholds_for_mcu(self.robot_data, vals)
-
-            # Build triggers (likely returns dicts with keys including delay_ms)
             triggers = triggers_from_thresholds(thresholds, delay_ms=9)
-
             self.logger.log.info(f"WS: set_triggers (incremental) count={len(triggers)}")
-
             channel_count = self.get_channel_count_for_robot(self.robot_data, rid)
 
             # Incremental send to reduce MCU memory pressure
@@ -60,12 +53,11 @@ class WebsocketServer():
                 triggers=triggers,
                 clear_first=True,
                 channel_count=channel_count,
-                default_delay_s=None,   # if triggers miss delay, set something like 0.009 here
-                wait_for_ack=False,     # set True if your reader pushes MCU acks into self.mcu_reads
+                default_delay_s=None,
+                wait_for_ack=False,
                 ack_timeout_s=1.5,
             )
 
-            # Also enqueue an initial broadcast to HMI
             await self.responses.put({
                 "type": "robot_list",
                 "v": self.robot_data.get("version", 1),
@@ -89,7 +81,6 @@ class WebsocketServer():
     async def connection_handler(self, websocket):
         await asyncio.gather(
             self.consumer(websocket),
-            #self.image_producer(websocket),
             self.response_producer(websocket),
         )
         self.shutdown_event.set()
@@ -111,7 +102,6 @@ class WebsocketServer():
         self.logger.log.info(packet)
         cmd = json.loads(packet)
 
-        # --- Simple config commands ---
         t = cmd.get("type")
 
         if t == "get_robot_list":
@@ -208,17 +198,7 @@ class WebsocketServer():
                 })
             return
 
-        # Keep your existing behavior for other commands
         await self.commands.put(cmd)
-
-
-    #async def image_producer(self, websocket):
-        #while True:
-            #image = await self.images.get()
-            #angle = await self.angles.get()
-            #offset = await self.offsets.get()
-            
-            #await websocket.send(json.dumps({'image': image}))
 
 
     async def response_producer(self, websocket):
@@ -312,13 +292,6 @@ class WebsocketServer():
         wait_for_ack: bool = False,
         ack_timeout_s: float = 1.5,
     ) -> None:
-        """
-        Incrementally send triggers to the MCU, minimizing parsing/memory pressure.
-        Each message is: {"action":"set_triggers", "trigger": {...}, ["clear": True on first]}
-        - Normalizes to MCU schema (delay in seconds).
-        - Optionally validates against channel_count.
-        - Optional ack wait after each send (expects an MCU response on self.mcu_reads).
-        """
         triggers_list = list(triggers)  # in case caller passes a generator
 
         if not triggers_list and clear_first:
@@ -347,16 +320,11 @@ class WebsocketServer():
             await self.mcu_writes.put(payload)
             self.logger.log.debug(f"WS: set_triggers -> {payload}")
 
-            # Yield to the loop so other tasks can run promptly
             await asyncio.sleep(0)
 
-            # Optional ack handling (expects your read loop to push MCU replies into self.mcu_reads)
             if wait_for_ack:
                 try:
                     resp = await asyncio.wait_for(self.mcu_reads.get(), timeout=ack_timeout_s)
-                    # If you need to verify the response:
-                    # if not (isinstance(resp, dict) and resp.get("status") == "triggers_loaded"):
-                    #     self.logger.log.warning(f"Unexpected MCU ack: {resp}")
                     self.logger.log.debug(f"MCU ack: {resp}")
                 except asyncio.TimeoutError:
                     self.logger.log.warning("WS: No MCU ack for set_triggers within timeout; continuing...")

@@ -10,21 +10,15 @@ import sys
 
 class Grlrr():
     def __init__(self):
-        # varibale and object creation and organization
         self.logger = Logger()
         self.qs = Queues()
         self.log_server = LogServer(logger=self.logger)
         self.wss = WebsocketServer(logger=self.logger, queues=self.qs)
         self.ss = SerialServer(logger=self.logger, queues=self.qs)
         self.detector = AprilTagDetector(queues=self.qs, rtsp_url="rtsp://vestas:vestasvestas@192.168.8.164:554/stream1")
-
         self.logger.log.info("grlrr init")
         self.cmd = 'initialize_robot'
-
-        #Task tracking
         self.integration_tasks = []
-
-        # Register signal handler
         signal.signal(signal.SIGINT, self.teardown)
 
 
@@ -45,6 +39,7 @@ class Grlrr():
 
     '''
     async def cli_listener(self):
+    #For cmd line interface to send commands
         while True:
             command = await asyncio.to_thread(input, "Enter command: ")
             command = command.strip().lower()
@@ -94,10 +89,6 @@ class Grlrr():
          
             case 'initialize_robot':
                 print('some init')
-          
-            case 'set_speed':
-                print('set speed')
-                #self.ss.mcu_writes.put_nowait({'action': 'set_speed', 'speed': '' ,})
          
             case 'start_process':
                 print('started process')

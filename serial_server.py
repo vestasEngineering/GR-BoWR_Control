@@ -32,22 +32,12 @@ class SerialServer():
 
         # Initialize actuators
         self.mcu_writes.put_nowait({"action": "set_triggers", "clear": True})
-        #self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 0, 'voltage': 1})
-        #self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 1, 'voltage': 2})
-        #self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 2, 'voltage': 3})
-        #self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 3, 'voltage': 4})
-        
         #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 0})
         #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 1})
         #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 2})
 
         self.mcu_writes.put_nowait({'action': 'set_light', 'state': 'GREEN'})
-        self.mcu_writes.put_nowait({'action': 'reset_encoder'})
-        #self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 0, "activate": 0, "deactivate": 3, "delay": 0}]})
-        #self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 1150, "activate": 1, "deactivate": 0, "delay": 9}]})
-        #self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 2300, "activate": 2, "deactivate": 1, "delay": 9}]})
-        #self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 3450, "activate": 3, "deactivate": 2, "delay": 9}]})        
-
+        self.mcu_writes.put_nowait({'action': 'reset_encoder'})    
         
         try:
             data = load_robot_list()
@@ -70,7 +60,6 @@ class SerialServer():
                     clear_first=True  # use firmware 'clear' to reset your buffer
                 )
 
-            # If you're in __init__, schedule a task; if in run(), you can await it directly.
             asyncio.get_event_loop().create_task(schedule_triggers())
 
         except Exception as e:
@@ -159,6 +148,7 @@ class SerialServer():
         while True:
             await self.mcu_writes.put({"hb": 1})
             await asyncio.sleep(0.75)
+
 
     #async def parse_dict(self, msg_dict):
     #    if 'distance' in msg_dict:
@@ -273,11 +263,6 @@ class SerialServer():
 
     
     async def _send_triggers_single_object(self, triggers, *, inter_delay=0.05, clear_first=True):
-        """
-        Sends triggers to the MCU using the single 'trigger' object format to minimize MCU memory usage.
-        - Optionally clears existing triggers first.
-        - Adds a small delay between messages to avoid flooding the MCU.
-        """
         try:
             if clear_first:
                 await self.mcu_writes.put({"action": "set_triggers", "clear": True})

@@ -37,10 +37,6 @@ def start_server():
         print(f"Failed to start server: {e}")
 
 def stop_server_via_sigint():
-    """
-    Send Ctrl+C-equivalent (SIGINT) to the running app.
-    Prefer STOP_SCRIPT so you have one place to adjust behavior.
-    """
     global app_process, server_running
     if not server_running:
         print("Not running; ignoring stop.")
