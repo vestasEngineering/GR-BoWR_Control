@@ -16,7 +16,6 @@ class Grlrr():
         self.log_server = LogServer(logger=self.logger)
         self.wss = WebsocketServer(logger=self.logger, queues=self.qs)
         self.ss = SerialServer(logger=self.logger, queues=self.qs)
-
         self.detector = AprilTagDetector(queues=self.qs, rtsp_url="rtsp://vestas:vestasvestas@192.168.8.164:554/stream1")
 
         self.logger.log.info("grlrr init")

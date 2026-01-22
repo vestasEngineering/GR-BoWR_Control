@@ -1,13 +1,18 @@
-source .venv/bin/activate
+#!/usr/bin/env bash
+set -euo pipefail
 
-connection_name=$(nmcli -g name connection show | head -1)
+# Activate venv
+source /home/vestas/Documents/Projects/GRLRR_CONTROL/.venv/bin/activate
 
+# Ensure hotspot is up; requires NetworkManager and suitable permissions
+connection_name=$(nmcli -g name connection show | head -1 || true)
 if [[ "$connection_name" == "Hotspot" ]]; then
     echo "Hotspot already enabled"
 else
+    echo "Enabling hotspot..."
     nmcli dev wifi hotspot ifname wlan0 ssid grlrr2024 password grlrr2024
-
 fi
 
-echo "Starting..."
-sudo -E env "PATH=$PATH" python main.py
+echo "Starting main app..."
+# Use absolute path, run in foreground so the process is parented to this script
+exec python /home/vestas/Documents/Projects/GRLRR_CONTROL/main.py

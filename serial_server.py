@@ -6,6 +6,10 @@ import asyncio
 from logger import Logger
 from queues import Queues
 import traceback
+from robot_list import (
+    load_robot_list, get_defaults, get_transitions,
+    thresholds_for_mcu, triggers_from_thresholds
+)
 
 
 class SerialServer():
@@ -27,21 +31,50 @@ class SerialServer():
         })
 
         # Initialize actuators
-        self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 0, 'voltage': 0})
-        self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 1, 'voltage': 0})
-        self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 2, 'voltage': 0})
-        self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 3, 'voltage': 0})
+        self.mcu_writes.put_nowait({"action": "set_triggers", "clear": True})
+        #self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 0, 'voltage': 1})
+        #self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 1, 'voltage': 2})
+        #self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 2, 'voltage': 3})
+        #self.mcu_writes.put_nowait({'action': 'set_voltage', 'channel': 3, 'voltage': 4})
         
         #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 0})
         #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 1})
         #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 2})
 
+        self.mcu_writes.put_nowait({'action': 'set_light', 'state': 'GREEN'})
         self.mcu_writes.put_nowait({'action': 'reset_encoder'})
-        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 0, "activate": 0, "deactivate": 3, "delay": 0}]})
-        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 1150, "activate": 1, "deactivate": 0, "delay": 9}]})
-        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 2300, "activate": 2, "deactivate": 1, "delay": 9}]})
-        self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 3450, "activate": 3, "deactivate": 2, "delay": 9}]})
+        #self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 0, "activate": 0, "deactivate": 3, "delay": 0}]})
+        #self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 1150, "activate": 1, "deactivate": 0, "delay": 9}]})
+        #self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 2300, "activate": 2, "deactivate": 1, "delay": 9}]})
+        #self.mcu_writes.put_nowait({"action": "set_triggers", "triggers": [ {"threshold": 3450, "activate": 3, "deactivate": 2, "delay": 9}]})        
 
+        
+        try:
+            data = load_robot_list()
+            rid, bid = get_defaults(data)
+            vals = get_transitions(data, rid, bid)
+            thresholds = thresholds_for_mcu(data, vals)
+
+            triggers = self.build_triggers_with_pattern(
+                thresholds,
+                first_delay_ms=0,   # first has delay 0
+                other_delay_ms=9    # rest have delay 9
+            )
+
+            self.logger.log.info(f"SerialServer: will set_triggers from saved list -> {triggers}")
+
+            async def schedule_triggers():
+                await self._send_triggers_single_object(
+                    triggers,
+                    inter_delay=0.05,
+                    clear_first=True  # use firmware 'clear' to reset your buffer
+                )
+
+            # If you're in __init__, schedule a task; if in run(), you can await it directly.
+            asyncio.get_event_loop().create_task(schedule_triggers())
+
+        except Exception as e:
+            self.logger.log.error(f"Error sending triggers: {e}") 
 
         self.mcu = None
 
@@ -154,6 +187,7 @@ class SerialServer():
 
 
     async def shutdown(self):
+        self.mcu_writes.put_nowait({'action': 'set_light', 'state': 'YELLOW'})
         self.logger.log.info("SerialServer shutting down...")
 
         try:
@@ -217,3 +251,40 @@ class SerialServer():
                 await asyncio.sleep(0)
         except asyncio.CancelledError:
             self.logger.log.info("Receive task cancelled.")
+
+
+
+    def build_triggers_with_pattern(thresholds, first_delay_ms=0, other_delay_ms=9):
+        """
+        Create the trigger dicts with:
+        activate = i
+        deactivate = (i - 1) % n
+        delay = first_delay_ms for i==0 else other_delay_ms
+        """
+        n = len(thresholds)
+        triggers = []
+        for i, th in enumerate(thresholds):
+            triggers.append({
+                "threshold": int(th),
+                        "activate": i,
+                "deactivate": (i - 1) % n,
+                "delay": first_delay_ms if i == 0 else other_delay_ms,
+            })
+
+    
+    async def _send_triggers_single_object(self, triggers, *, inter_delay=0.05, clear_first=True):
+        """
+        Sends triggers to the MCU using the single 'trigger' object format to minimize MCU memory usage.
+        - Optionally clears existing triggers first.
+        - Adds a small delay between messages to avoid flooding the MCU.
+        """
+        try:
+            if clear_first:
+                await self.mcu_writes.put({"action": "set_triggers", "clear": True})
+
+            for trig in triggers:
+                # Use the single 'trigger' object format supported by your firmware
+                await self.mcu_writes.put({"action": "set_triggers", "trigger": trig})
+                await asyncio.sleep(inter_delay)
+        except Exception as e:
+            self.logger.log.error(f"Error sending triggers: {e}")
