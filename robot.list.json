@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "units": "meters",
+  "units": "m",
   "encoder_scale": 1000.0,
   "robots": [
     {
@@ -31,13 +31,18 @@
       "max_transitions": 4
     },
     {
-      "id": "V174",
-      "name": "V174",
+      "id": "V162",
+      "name": "V162",
       "max_transitions": 4
     },
     {
       "id": "V236",
       "name": "V236",
+      "max_transitions": 4
+    },
+    {
+      "id": "TestBlade",
+      "name": "TestBlade",
       "max_transitions": 4
     }
   ],
@@ -58,7 +63,7 @@
         20,
         30
       ],
-      "V174": [
+      "V162": [
         0,
         10,
         20,
@@ -71,6 +76,12 @@
         70,
         100,
         116
+      ],
+      "TestBlade": [
+        0,
+        2,
+        4,
+        6
       ]
     },
     "GR-OVR": {
@@ -89,7 +100,7 @@
         20,
         30
       ],
-      "V174": [
+      "V162": [
         0,
         10,
         20,
@@ -98,11 +109,17 @@
       "V236": [
         0,
         90
+      ],
+      "TestBlade": [
+        0,
+        2,
+        4,
+        6
       ]
     }
   },
   "defaults": {
     "robot_id": "GR-LRR",
-    "blade_id": "V236"
+    "blade_id": "TestBlade"
   }
 }

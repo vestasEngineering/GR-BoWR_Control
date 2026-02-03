@@ -11,6 +11,35 @@ from robot_list import (
     get_defaults, get_transitions,
     thresholds_for_mcu, triggers_from_thresholds
 )
+from health import HealthModel
+
+MODULES = [
+    # Motors (axes 0..3)
+    {"id": "motor_1", "name": "Motor 1 (Axis 0)", "category": "motor", "index": 0},
+    {"id": "motor_2", "name": "Motor 2 (Axis 1)", "category": "motor", "index": 1},
+    {"id": "motor_3", "name": "Motor 3 (Axis 2)", "category": "motor", "index": 2},
+    {"id": "motor_4", "name": "Motor 4 (Axis 3)", "category": "motor", "index": 3},
+
+    # Actuators (channels 0..3)
+    {"id": "actuator_1", "name": "Actuator A (Ch 0)", "category": "actuator", "channel": 0},
+    {"id": "actuator_2", "name": "Actuator B (Ch 1)", "category": "actuator", "channel": 1},
+    {"id": "actuator_3", "name": "Actuator C (Ch 2)", "category": "actuator", "channel": 2},
+    {"id": "actuator_4", "name": "Actuator D (Ch 3)", "category": "actuator", "channel": 3},
+
+    # Sensors
+    {"id": "ultrasonic", "name": "Ultrasonic Sensor", "category": "sensor", "sensor": "ultrasonic"},
+    {"id": "battery", "name": "Battery", "category": "sensor", "sensor": "battery"},
+    {"id": "jog_forward_switch",  "name": "Jog Forward Switch (D1)",  "category": "sensor", "sensor": "digital", "pin": 1,  "expect": True},
+    {"id": "jog_backward_switch", "name": "Jog Backward Switch (D10)","category": "sensor", "sensor": "digital", "pin": 10, "expect": True},
+
+
+    #Ultrasonic Servo
+    {"id": "ultrasonic_servo", "name": "Ultrasonic Servo", "category": "servo"},
+
+    # Andon
+    {"id": "andon_ring", "name": "Andon Ring", "category": "andon"},
+]
+MODULE_BY_ID = {m["id"]: m for m in MODULES}
 
 class WebsocketServer():
     def __init__(self, logger:Logger, queues:Queues):
@@ -21,6 +50,8 @@ class WebsocketServer():
         self.mcu_writes = queues.mcu_writes
         self.connected = False
         self.shutdown_event = asyncio.Event()
+        self.health = HealthModel()
+        self.latest_health: Optional[dict] = None
         #self._active_connections = set[WebsocketServerProtocol] = set()
     
     async def run(self):
@@ -44,7 +75,11 @@ class WebsocketServer():
             rid, bid = get_defaults(self.robot_data)
             vals = get_transitions(self.robot_data, rid, bid)
             thresholds = thresholds_for_mcu(self.robot_data, vals)
-            triggers = triggers_from_thresholds(thresholds, delay_ms=9)
+            triggers = triggers_from_thresholds(
+                thresholds,
+                delay_s=9.0,
+                first_delay_s=0.0
+            )
             self.logger.log.info(f"WS: set_triggers (incremental) count={len(triggers)}")
             channel_count = self.get_channel_count_for_robot(self.robot_data, rid)
 
@@ -73,17 +108,100 @@ class WebsocketServer():
         except Exception as e:
             self.logger.log.exception(f"Failed to apply/default broadcast: {e}")
 
-
         # Start the websocket server
         async with serve(self.connection_handler, "0.0.0.0", 5000):
+            asyncio.create_task(self.health_pump())
             await self.shutdown_event.wait()
 
     async def connection_handler(self, websocket):
+        # send a snapshot right away if we have one
+        if self.latest_health is not None:
+            try:
+                await websocket.send(json.dumps({'response': self.latest_health}))
+            except Exception:
+                pass
+
         await asyncio.gather(
             self.consumer(websocket),
             self.response_producer(websocket),
         )
         self.shutdown_event.set()
+        
+    async def health_pump(self):
+        """
+        Consumes MCU messages (andon_diag, boot_health, test_result), computes a consolidated
+        health snapshot, and pushes it to self.responses whenever it changes.
+        """
+        while True:
+            msg = await self.mcu_reads.get()
+            try:
+                # 1) Pass-through module test results
+                if isinstance(msg, dict) and msg.get("type") == "test_result":
+                    await self.responses.put(msg)
+                    continue
+
+                # 2) Quick synthesis from boot_health (immediate snapshot for HMI)
+                if isinstance(msg, dict) and msg.get("type") == "boot_health":
+                    bh = msg
+                    state = "ok" if bh.get("ok") else "fault"
+                    synth = {
+                        "type": "health",
+                        "state": state,
+                        "sources": ["boot_health"],
+                        "ts": bh.get("ts_ms"),
+                        "boot_checks": bh.get("checks", {}),
+                    }
+                    self.latest_health = synth
+                    await self.responses.put(synth)
+                    self.logger.log.info(f"[HEALTH/SYNTH] from boot_health state={state}")
+                    # Don't 'continue'—also let HealthModel see it below
+
+                # 3) Optional: map andon_diag to a minimal health (keeps UI lively)
+                if isinstance(msg, dict) and msg.get("type") == "andon_diag":
+                    ad = msg
+                    # You can tighten this mapping based on your AndonManager policy
+                    # Example simple mapping:
+                    code_state = (ad.get("state") or "").lower()
+                    # normalize a few to health states
+                    mapping = {
+                        "green": "ok",
+                        "yellow": "warning",
+                        "blue": "degraded",
+                        "red": "fault",
+                        "blink_red": "fault",
+                        "blink_yellow": "warning",
+                        "blink_green": "ok",
+                        "blink_blue": "degraded",
+                        "off": "unknown",
+                    }
+                    state = mapping.get(code_state, "unknown")
+                    synth = {
+                        "type": "health",
+                        "state": state,
+                        "sources": ["andon_diag"],
+                        "ts": ad.get("ms"),
+                        "andon": ad,  # include full original for raw dump
+                    }
+                    self.latest_health = synth
+                    await self.responses.put(synth)
+                    self.logger.log.info(f"[HEALTH/SYNTH] from andon_diag mapped_state={state}")
+                    # Don't continue; HealthModel may want it too
+
+                # 4) Let the canonical model run—if it emits, prefer it
+                new_snap = self.health.update_from_mcu(msg)
+                if new_snap:
+                    # IMPORTANT: make sure new_snap includes {"type": "health", ...}
+                    if new_snap.get("type") != "health":
+                        new_snap["type"] = "health"
+                    self.latest_health = new_snap
+                    await self.responses.put(new_snap)
+                    self.logger.log.info(
+                        f"[HEALTH] state={new_snap.get('state')} sources={new_snap.get('sources')}"
+                    )
+
+            except Exception as e:
+                self.logger.log.exception(f"health_pump error: {e}")
+
 
 #==============================================================
 # message receiver
@@ -122,7 +240,11 @@ class WebsocketServer():
             try:
                 vals = get_transitions(self.robot_data, rid, bid)
                 thresholds = thresholds_for_mcu(self.robot_data, vals)
-                triggers = triggers_from_thresholds(thresholds, delay_ms=9)
+                triggers = triggers_from_thresholds(
+                    thresholds,
+                    delay_s=9.0,
+                    first_delay_s=0.0
+                )
 
                 channel_count = self.get_channel_count_for_robot(self.robot_data, rid)
                 await self.send_triggers_incrementally(
@@ -162,7 +284,12 @@ class WebsocketServer():
                 save_robot_list(self.robot_data)
 
                 thresholds = thresholds_for_mcu(self.robot_data, [float(v) for v in vals])
-                triggers = triggers_from_thresholds(thresholds, delay_ms=9)
+                triggers = triggers_from_thresholds(
+                    thresholds,
+                    delay_s=9.0,
+                    first_delay_s=0.0
+                )
+
 
                 channel_count = self.get_channel_count_for_robot(self.robot_data, rid)
                 await self.send_triggers_incrementally(
@@ -196,6 +323,50 @@ class WebsocketServer():
                     "error": "save_failed",
                     "details": str(e),
                 })
+            return
+
+        elif t == "get_modules":
+            await self.responses.put({"type": "modules", "items": MODULES})
+            return
+
+        elif t == "test_module":
+            mid = cmd.get("id")
+            if not mid or mid not in MODULE_BY_ID:
+                await self.responses.put({"type":"error","error":"bad_request","details":"unknown module id","id":mid})
+                return
+
+            mod = MODULE_BY_ID[mid]
+            cat = mod["category"]
+
+            # Ack immediately so HMI shows "Running"
+            await self.responses.put({"type":"ack","ok":True,"info":"test_started","id":mid})
+
+            if cat == "motor":
+                await self.mcu_writes.put({
+                    "action":"test_motor","id":mid,
+                    "index": int(mod.get("index",0)),
+                    "speed": 0.02, "duration_ms": 600
+                })
+            elif cat == "actuator":
+                await self.mcu_writes.put({
+                    "action":"test_actuator","id":mid,
+                    "channel": int(mod.get("channel",0)),
+                    "voltage": 3.0, "tolerance": 0.8, "settle_ms": 100
+                })
+            elif cat == "sensor":
+                sensor_kind = mod.get("sensor","ultrasonic")
+                payload = {"action":"test_sensor","id":mid,"sensor": sensor_kind}
+                if sensor_kind == "digital":
+                    payload["pin"] = int(mod.get("pin",1))
+                    payload["expect"] = bool(mod.get("expect",True))
+                    payload["sample_ms"] = 300
+                await self.mcu_writes.put(payload)
+            elif cat == "andon":
+                await self.mcu_writes.put({"action":"test_light","id": mid})
+            elif cat == "servo":
+                await self.mcu_writes.put({"action": "test_servo", "id": mid})
+            else:
+                await self.responses.put({"type":"error","error":"unsupported_module","details":f"category={cat}","id":mid})
             return
 
         await self.commands.put(cmd)
@@ -282,6 +453,7 @@ class WebsocketServer():
 
         return True, None
 
+
     async def send_triggers_incrementally(
         self,
         triggers: Iterable[Dict[str, Any]],
@@ -292,13 +464,16 @@ class WebsocketServer():
         wait_for_ack: bool = False,
         ack_timeout_s: float = 1.5,
     ) -> None:
-        triggers_list = list(triggers)  # in case caller passes a generator
+        triggers_list = list(triggers)
 
-        if not triggers_list and clear_first:
-            # If no triggers, we can still clear MCU state to be explicit.
-            msg = {"action": "set_triggers", "clear": True}
-            await self.mcu_writes.put(msg)
-            self.logger.log.info("WS: set_triggers -> [clear only] (no triggers)")
+        # If we’re replacing the table, clear once as a standalone message.
+        if clear_first:
+            await self.mcu_writes.put({"action": "set_triggers", "clear": True})
+            self.logger.log.debug("WS: set_triggers -> {'clear': True}")
+
+        if not triggers_list:
+            if clear_first:
+                self.logger.log.info("WS: set_triggers -> [clear only] (no triggers)")
             return
 
         for idx, raw in enumerate(triggers_list):
@@ -314,9 +489,6 @@ class WebsocketServer():
                 continue
 
             payload = {"action": "set_triggers", "trigger": t}
-            if clear_first and idx == 0:
-                payload["clear"] = True
-
             await self.mcu_writes.put(payload)
             self.logger.log.debug(f"WS: set_triggers -> {payload}")
 

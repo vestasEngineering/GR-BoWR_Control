@@ -3,273 +3,398 @@ import fnmatch
 import serial
 import json
 import asyncio
+from typing import List, Optional
 from logger import Logger
 from queues import Queues
-import traceback
 from robot_list import (
     load_robot_list, get_defaults, get_transitions,
     thresholds_for_mcu, triggers_from_thresholds
 )
 
 
-class SerialServer():
+class SerialServer:
     def __init__(self, logger: Logger, queues: Queues):
         self.logger = logger
+
+        # Queues (unchanged)
         self.mcu_reads = queues.mcu_reads
         self.mcu_writes = queues.mcu_writes
         self.distance = queues.distance
         self.feedback_reads = queues.feedbackSignals
         self.encoder_distance = queues.encoder_distance
 
-        # self.mcu_writes.put_nowait({"msgtyp": "get", "device":"?", "motorSpeed":0})
-        self.mcu_writes.put_nowait({"start_serial":      1})
-        self.mcu_writes.put_nowait({
-            "speed0": 0,
-            "speed1": 0,
-            "speed2": 0,
-            "speed3": 0
-        })
+        # State
+        self.last_andon_code: Optional[int] = None
+        self.mcu: Optional[serial.Serial] = None
+        self.send_task: Optional[asyncio.Task] = None
+        self.receive_task: Optional[asyncio.Task] = None
+        self.heartbeat_task: Optional[asyncio.Task] = None
+        self._stopping = False
 
-        # Initialize actuators
-        self.mcu_writes.put_nowait({"action": "set_triggers", "clear": True})
-        #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 0})
-        #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 1})
-        #self.mcu_writes.put_nowait({'action': 'read_feedback', 'channel': 2})
+        # RX rolling buffer for brace-balanced extraction (B)
+        self._rx_buf: str = ""
 
-        self.mcu_writes.put_nowait({'action': 'set_light', 'state': 'GREEN'})
-        self.mcu_writes.put_nowait({'action': 'reset_encoder'})    
-        
-        try:
-            data = load_robot_list()
-            rid, bid = get_defaults(data)
-            vals = get_transitions(data, rid, bid)
-            thresholds = thresholds_for_mcu(data, vals)
+        # Initial startup messages (queued; will be sent after first connect)
+        self.mcu_writes.put_nowait({"start_serial": 1})
+        self.mcu_writes.put_nowait({"speed0": 0, "speed1": 0, "speed2": 0, "speed3": 0})
+        self.mcu_writes.put_nowait({"action": "reset_encoder"})
+        #self.mcu_writes.put_nowait(
+        #                            {"action":"test_actuator_map",
+        #                            "id":"map_ch0",
+        #                            "channel":1,
+        #                            "start_V":0.0,
+        #                            "end_V":5.0,
+        #                            "step_V":0.5,
+        #                            "settle_ms":800,
+        #                            "avg_samples":5,
+        #                            "avg_delay_ms":3})
 
-            triggers = self.build_triggers_with_pattern(
-                thresholds,
-                first_delay_ms=0,   # first has delay 0
-                other_delay_ms=9    # rest have delay 9
-            )
 
-            self.logger.log.info(f"SerialServer: will set_triggers from saved list -> {triggers}")
 
-            async def schedule_triggers():
-                await self._send_triggers_single_object(
-                    triggers,
-                    inter_delay=0.05,
-                    clear_first=True  # use firmware 'clear' to reset your buffer
-                )
-
-            asyncio.get_event_loop().create_task(schedule_triggers())
-
-        except Exception as e:
-            self.logger.log.error(f"Error sending triggers: {e}") 
-
-        self.mcu = None
-
-    def detect_serial(self, preferred_list=['*']):
-        '''try to auto-detect serial ports on win32'''
+    # --------------------------
+    # Port management
+    # --------------------------
+    def detect_serial(self, preferred_list: List[str] = ['*']) -> List[str]:
+        """Auto-detect serial ports on Linux (/dev/ttyUSB* /dev/ttyACM*).
+        Returns ports matching preferred_list first, then everything else.
+        """
         glist = glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*')
-        ret = []
-
-        # try preferred ones first
+        ret: List[str] = []
         for d in glist:
             for preferred in preferred_list:
                 if fnmatch.fnmatch(d, preferred):
                     ret.append(d)
-        if len(ret) > 0:
+        if ret:
             return ret
-        # now the rest
-        for d in glist:
-            ret.append(d)
-        return ret
+        return glist
 
-    def connect_serial(self, available_ports):
+    def connect_serial(self, available_ports: List[str]) -> Optional[serial.Serial]:
+        """Open the first available port. Returns serial.Serial or None."""
+        if not available_ports:
+            self.logger.log.info("No serial ports available.")
+            return None
         try:
-            connected_device = serial.Serial(
-                available_ports[0], 115200, timeout=10.0)
-
-            if connected_device.isOpen():
-                self.logger.log.info("serial connected to "+str(available_ports[0]))
+            dev = available_ports[0]
+            # Keep 115200 to match MCU. timeout keeps read() bounded.
+            connected_device = serial.Serial(dev, 115200, timeout=10.0)
+            if connected_device.is_open:
+                self.logger.log.info(f"serial connected to {dev}")
                 return connected_device
             else:
-                raise Exception("No serial devices")
+                self.logger.log.error("Serial port failed to open (unknown reason).")
+                return None
         except Exception as e:
-            # send alert to the tablet
-            self.logger.log.info(e)
+            self.logger.log.info(f"connect_serial error: {e}")
+            return None
 
-    def valididate_serial(self, device):
-        try:
-            msg = {"msgtyp": "get", "device": "?"}
-            device.write((json.dumps(msg)+'\n').encode('ascii'))
-            new_msg = json.loads(device.read_until(
-                expected=b"\n").decode('ascii'))
-            self.logger.log.info(new_msg)
-            if new_msg["device"] == "h7":
-                self.logger.log.info("h7 connected")
-                return 1
-            else:
-                self.logger.log.error("NOT CONNECTED")
-                return 0
-        except Exception as e:
-            self.logger.log.error(e)
-            self.logger.log.error(
-                "no valid device / comm issue / no api endpoint")
-            
     def clear_serial(self):
-        self.mcu.reset_input_buffer()
-        self.mcu.reset_output_buffer()
+        """Clear buffers if port is open."""
+        if self.mcu and getattr(self.mcu, "is_open", False):
+            try:
+                self.mcu.reset_input_buffer()
+                self.mcu.reset_output_buffer()
+            except Exception as e:
+                self.logger.log.error(f"Error clearing serial buffers: {e}")
 
-
-    async def run(self):
-        self.mcu = self.connect_serial(self.detect_serial())
+    def close_serial(self):
+        """Close port if open and null the handle."""
         if self.mcu:
+            try:
+                if getattr(self.mcu, "is_open", False):
+                    try:
+                        self.mcu.reset_input_buffer()
+                        self.mcu.reset_output_buffer()
+                    except Exception:
+                        pass
+                    self.mcu.close()
+                    self.logger.log.info("Serial connection closed.")
+                else:
+                    self.logger.log.debug("close_serial: port already closed.")
+            except Exception as e:
+                self.logger.log.error(f"Error closing serial: {e}")
+            finally:
+                self.mcu = None
+
+    # --------------------------
+    # Lifecycle
+    # --------------------------
+    async def run(self):
+        """Auto-reconnect loop: connect → run send/receive/heartbeat → cleanup → retry."""
+        backoff = 1.0
+        while not self._stopping:
+            # 1) Detect & connect
+            ports = self.detect_serial()
+            self.mcu = self.connect_serial(ports)
+
+            if not self.mcu:
+                self.logger.log.info(f"No device. Retry in {backoff:.1f}s...")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 1.5, 10.0)  # capped backoff
+                continue
+
+            # Connected
+            backoff = 1.0
             self.clear_serial()
+            self._rx_buf = ""  # reset RX buffer
+
+            # 2) Spawn tasks
             self.send_task = asyncio.create_task(self.send())
             self.receive_task = asyncio.create_task(self.receive())
-            await asyncio.gather(self.send_task, self.receive_task)
-        else:
-            self.logger.log.info("Unable to connect to serial device. Exiting...")
-            quit()
+            # (A) heartbeat task keeps MCU comms alive
+            self.heartbeat_task = asyncio.create_task(self.heartbeat(period_s=0.5))
+
+            # 3) Wait until either task exits (disconnect/error/shutdown)
+            done, pending = await asyncio.wait(
+                {self.send_task, self.receive_task, self.heartbeat_task},
+                return_when=asyncio.FIRST_COMPLETED
+            )
+
+            # 4) Cancel the other tasks and cleanup
+            for t in pending:
+                t.cancel()
+            try:
+                await asyncio.gather(*pending, return_exceptions=True)
+            except Exception:
+                pass
+
+            self.close_serial()
+
+            # brief pause before trying again
+            if not self._stopping:
+                await asyncio.sleep(1.0)
+
+        self.logger.log.info("SerialServer.run exiting (stopping=True).")
+
+    # --------------------------
+    # Tasks
+    # --------------------------
+    async def heartbeat(self, period_s: float = 2.0):
+        """
+        Simple fixed heartbeat at a low rate (e.g., every 2s).
+        Keeps MCU comms watchdog alive without chatty traffic.
+        """
+        try:
+            while not self._stopping:
+                if not self.mcu or not getattr(self.mcu, "is_open", False):
+                    break
+                try:
+                    # Write directly, not via queue, so it doesn’t interfere with commands
+                    self.mcu.write(b'<{"hb":1}>')
+                except Exception as e:
+                    self.logger.log.debug(f"HB write failed (will retry): {e}")
+                await asyncio.sleep(period_s)
+        except asyncio.CancelledError:
+            return
 
 
     async def send(self):
+        """Drain outbound queue while port is open."""
         try:
             while True:
+                if not self.mcu or not getattr(self.mcu, "is_open", False):
+                    self.logger.log.info("Serial port is closed. Exiting send loop.")
+                    break
+
                 msg = await self.mcu_writes.get()
                 self.logger.log.info(f"Sending: {msg}")
-                self.mcu.write(('<' + json.dumps(msg) + '>').encode('ascii'))
+
+                try:
+                    # Pi -> MCU is framed <JSON> (you already did this; keep it)
+                    payload = '<' + json.dumps(msg) + '>'
+                    self.mcu.write(payload.encode('ascii', errors='ignore'))
+                except (serial.SerialException, serial.SerialTimeoutException) as e:
+                    # Re-queue the message so it isn't lost, then exit loop to trigger reconnect
+                    self.logger.log.error(f"Serial write error: {e}. Will reconnect.")
+                    try:
+                        self.mcu_writes.put_nowait(msg)
+                    except Exception:
+                        pass
+                    break
+                except Exception as e:
+                    self.logger.log.error(f"Unexpected send error: {e}")
+                    # Re-queue once; then exit
+                    try:
+                        self.mcu_writes.put_nowait(msg)
+                    except Exception:
+                        pass
+                    break
+
                 await asyncio.sleep(0.01)
         except asyncio.CancelledError:
             self.logger.log.info("Send task cancelled.")
 
-
-    async def hb(self):
-        while True:
-            await self.mcu_writes.put({"hb": 1})
-            await asyncio.sleep(0.75)
-
-
-    #async def parse_dict(self, msg_dict):
-    #    if 'distance' in msg_dict:
-    #        await self.distance.put(msg_dict['distance'])
-
-
-    async def send_shutdown(self):
-            if self.mcu:
-                self.logger.log.info("Sending shutdown command to H7...")
-                try:
-                    self.mcu.write(('<' + json.dumps({"action": "shutdown"}) + '>').encode('ascii'))
-                    await asyncio.sleep(0.5)  # Give H7 time to respond
-                except Exception as e:
-                    self.logger.log.error(f"Error sending shutdown: {e}")
-
-
-    def close_serial(self):
-        if self.mcu:
-            try:
-                self.mcu.reset_input_buffer()
-                self.mcu.reset_output_buffer()
-                self.mcu.close()
-                self.logger.log.info("Serial connection closed.")
-            except Exception as e:
-                self.logger.log.error(f"Error closing serial: {e}")
-
-
-    async def shutdown(self):
-        self.mcu_writes.put_nowait({'action': 'set_light', 'state': 'YELLOW'})
-        self.logger.log.info("SerialServer shutting down...")
-
-        try:
-            await self.mcu_writes.put({"action": "shutdown"})
-            await asyncio.sleep(0.5)
-
-            if self.send_task:
-                self.send_task.cancel()
-            if self.receive_task:
-                self.receive_task.cancel()
-
-            if self.mcu and self.mcu.is_open:
-                self.mcu.reset_input_buffer()
-                self.mcu.reset_output_buffer()
-                self.mcu.close()
-                self.logger.log.info("Serial port closed.")
-        except Exception as e:
-            self.logger.log.error(f"Error during SerialServer shutdown: {e}")
-
+    # --------------------------
+    # Robust RX: brace-balanced extraction (B)
+    # --------------------------
+    def _extract_json_objects(self):
+        """Yield complete JSON objects from self._rx_buf via brace matching.
+        Leaves incomplete tails in the buffer for next read.
+        """
+        outs = []
+        buf = self._rx_buf
+        start = buf.find('{')
+        while start != -1:
+            depth = 0
+            end = -1
+            for i, ch in enumerate(buf[start:], start):
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end = i
+                        break
+            if end != -1:
+                outs.append(buf[start:end + 1])
+                buf = buf[end + 1:]
+                start = buf.find('{')
+            else:
+                # Incomplete JSON; keep from 'start' onward and break
+                buf = buf[start:]
+                break
+        self._rx_buf = buf
+        return outs
 
     async def receive(self):
+        """Read bytes, extract JSON with brace matching, dispatch, until disconnect."""
         try:
             while True:
-                if not self.mcu or not self.mcu.is_open:
+                if not self.mcu or not getattr(self.mcu, "is_open", False):
                     self.logger.log.info("Serial port is closed. Exiting receive loop.")
-                    break  # Exit the loop cleanly
+                    break
 
+                chunk = b""
                 try:
-                    line = await asyncio.to_thread(self.mcu.readline)
-                    line = line.decode('ascii').strip()
-
-                    if not line.startswith("{"):
-                        self.logger.log.warning(f"Ignoring non-JSON line: {line}")
+                    # Read a small chunk in a thread (pyserial is blocking)
+                    chunk = await asyncio.to_thread(self.mcu.read, 256)
+                    if not chunk:
+                        await asyncio.sleep(0.01)
                         continue
 
-                    msg_dict = json.loads(line)
+                    text = chunk.decode('ascii', errors='ignore')
+                    if not text:
+                        await asyncio.sleep(0.01)
+                        continue
 
-                    # Handle known message types
-                    if 'distance' in msg_dict:
-                        await self.distance.put(msg_dict['distance'])
-                    elif 'feedback' in msg_dict:
-                        await self.feedback_reads.put(msg_dict['feedback'])
-                    elif 'encoder_distance' in msg_dict:
-                        await self.encoder_distance.put(msg_dict['encoder_distance'])
-                    elif msg_dict.get('status', '').lower() == "encoder reset":
-                        await self.encoder_distance.put(msg_dict)
-                    elif msg_dict.get('status', '').lower() == "light_updated":
-                        self.logger.log.info(f"Andon light updated to: {msg_dict.get('state')}")
-                    elif msg_dict.get("trigger_reached"):
-                        self.logger.log.info(f"Trigger reached on channel {msg_dict['channel']} at value {msg_dict['value']}")
-                    elif msg_dict.get("trigger_deactivated"):
-                        self.logger.log.info(f"Trigger deactivated on channel {msg_dict['channel']}")
-                    elif msg_dict.get("status", "").lower() == "shutdown_complete":
-                        self.logger.log.info("Shutdown confirmed by H7.")
+                    # Accumulate and extract any complete JSON objects (B)
+                    self._rx_buf += text
+                    for json_text in self._extract_json_objects():
+                        try:
+                            msg_dict = json.loads(json_text)
+                        except json.JSONDecodeError as e:
+                            self.logger.log.error(f"JSON decode error: {e} - Raw: {json_text[:160]}")
+                            continue
 
-                except json.JSONDecodeError as e:
-                    self.logger.log.error(f"JSON decode error: {e} - Raw data: {line}")
+                        # ---- Dispatch (C tweak applied) ----
+                        if 'distance' in msg_dict:
+                            await self.distance.put(msg_dict['distance'])
+
+                        elif 'feedback' in msg_dict:
+                            await self.feedback_reads.put(msg_dict['feedback'])
+
+                        elif 'encoder_distance' in msg_dict:
+                            await self.encoder_distance.put(msg_dict['encoder_distance'])
+
+                        # (C) Accept both "encoder reset" and "All encoders reset"
+                        elif msg_dict.get('status', '').lower() in ("encoder reset", "all encoders reset"):
+                            await self.encoder_distance.put(msg_dict)
+
+                        elif msg_dict.get('status', '').lower() == "light_updated":
+                            self.logger.log.info(f"Andon light updated to: {msg_dict.get('state')}")
+
+                        elif msg_dict.get("trigger_reached"):
+                            self.logger.log.info(
+                                f"Trigger reached on channel {msg_dict.get('channel')} at value {msg_dict.get('value')}"
+                            )
+
+                        elif msg_dict.get("trigger_deactivated"):
+                            self.logger.log.info(f"Trigger deactivated on channel {msg_dict.get('channel')}")
+
+                        elif msg_dict.get("status", "").lower() == "shutdown_complete":
+                            self.logger.log.info("Shutdown confirmed by H7.")
+
+                        elif 'andon_diag' in msg_dict:
+                            diag = msg_dict['andon_diag']
+                            code = diag.get('code')
+                            state = diag.get('state')
+                            override = diag.get('override')
+                            reasons = diag.get('reasons', {})
+                            faults  = diag.get('faults', [])
+                            fmods   = diag.get('fault_modules', [])
+
+
+                            if code != self.last_andon_code:
+                                self.last_andon_code = code
+
+                            await self.mcu_reads.put({'type': 'andon_diag', **diag})
+                            self.logger.log.info(
+                                f"Andon diag → state={state} code={code} override={override} "
+                                f"reasons={reasons} faults={faults} fault_modules={fmods} keys={list(diag.keys())}"
+                            )
+
+                  
+                        elif msg_dict.get("type") == "boot_health":
+                            # Forward to central queue for health aggregation
+                            await self.mcu_reads.put(msg_dict)
+                            self.logger.log.info(
+                                f"Boot health ok={msg_dict.get('ok')} checks={list((msg_dict.get('checks') or {}).keys())}"
+                            )
+
+                        elif msg_dict.get("type") == "test_result":
+                            # Pass directly to WebSocketServer health_pump via mcu_reads queue
+                            await self.mcu_reads.put(msg_dict)
+                    
+                        else:
+                            # Forward any other top-level dict to health/WS pipeline.
+                            await self.mcu_reads.put(msg_dict)
+
+
+                except serial.SerialException as e:
+                    preview = repr(chunk[:80]) if isinstance(chunk, (bytes, bytearray)) else repr(chunk)
+                    self.logger.log.error(f"Serial exception: {e} - Raw data preview: {preview}")
+                    # Exit loop to trigger reconnect in run()
+                    break
                 except Exception as e:
-                    self.logger.log.error(f"Error parsing serial data: {e} - Raw data: {line}")
+                    preview = repr(chunk[:80]) if isinstance(chunk, (bytes, bytearray)) else repr(chunk)
+                    self.logger.log.error(f"Error parsing serial data: {e} - Raw data preview: {preview}")
 
                 await asyncio.sleep(0)
         except asyncio.CancelledError:
             self.logger.log.info("Receive task cancelled.")
 
+    # --------------------------
+    # Shutdown helpers
+    # --------------------------
+    async def send_shutdown(self):
+        if self.mcu and getattr(self.mcu, "is_open", False):
+            self.logger.log.info("Sending shutdown command to H7...")
+            try:
+                payload = '<' + json.dumps({"action": "shutdown"}) + '>'
+                self.mcu.write(payload.encode('ascii', errors='ignore'))
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                self.logger.log.error(f"Error sending shutdown: {e}")
 
-
-    def build_triggers_with_pattern(thresholds, first_delay_ms=0, other_delay_ms=9):
-        """
-        Create the trigger dicts with:
-        activate = i
-        deactivate = (i - 1) % n
-        delay = first_delay_ms for i==0 else other_delay_ms
-        """
-        n = len(thresholds)
-        triggers = []
-        for i, th in enumerate(thresholds):
-            triggers.append({
-                "threshold": int(th),
-                        "activate": i,
-                "deactivate": (i - 1) % n,
-                "delay": first_delay_ms if i == 0 else other_delay_ms,
-            })
-
-    
-    async def _send_triggers_single_object(self, triggers, *, inter_delay=0.05, clear_first=True):
+    async def shutdown(self):
+        """Stop auto-reconnect loop and close port cleanly."""
+        self._stopping = True
+        self.logger.log.info("SerialServer shutting down...")
         try:
-            if clear_first:
-                await self.mcu_writes.put({"action": "set_triggers", "clear": True})
+            await self.mcu_writes.put({"action": "shutdown"})
+            await asyncio.sleep(0.5)
+        except Exception:
+            pass
 
-            for trig in triggers:
-                # Use the single 'trigger' object format supported by your firmware
-                await self.mcu_writes.put({"action": "set_triggers", "trigger": trig})
-                await asyncio.sleep(inter_delay)
-        except Exception as e:
-            self.logger.log.error(f"Error sending triggers: {e}")
+        for t in (self.send_task, self.receive_task, self.heartbeat_task):
+            if t and not t.done():
+                t.cancel()
+        # Best-effort gather
+        try:
+            await asyncio.gather(
+                *(t for t in (self.send_task, self.receive_task, self.heartbeat_task) if t),
+                return_exceptions=True
+            )
+        except Exception:
+            pass
+
+        self.close_serial()

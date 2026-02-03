@@ -67,6 +67,7 @@ class Grlrr():
         self.event_loop.create_task(self.wss.run())
         self.event_loop.create_task(self.ss.run())
         self.event_loop.create_task(self.detector.run())
+        #self.event_loop.create_task(self.monitor_andon_diag())
 
 
     def get_command(self):
@@ -132,3 +133,18 @@ class Grlrr():
             await asyncio.gather(self.loop_task)
             #cli_task = asyncio.create_task(self.cli_listener())
             #await asyncio.gather(self.loop_task, self.cli_listener())
+
+    async def monitor_andon_diag(self):
+        while True:
+            try:
+                msg = await self.qs.mcu_reads.get()
+                if isinstance(msg, dict) and msg.get('type') == 'andon_diag':
+                    # Minimal log; you could also forward to WS/UI here
+                    self.logger.log.info(
+                        f"[ANDON] {msg.get('state')} (code={msg.get('code')}) "
+                        f"override={msg.get('override')} reasons={msg.get('reasons')}"
+                    )
+                    # Example forward (if your WebsocketServer exposes such API):
+                    # await self.wss.broadcast_json({"andon": msg})
+            except Exception as e:
+                self.logger.log.error(f"monitor_andon_diag error: {e}")

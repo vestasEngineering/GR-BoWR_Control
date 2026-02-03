@@ -63,24 +63,32 @@ def get_transitions(data: Dict[str, Any], rid: str, bid: str) -> List[float]:
         raise KeyError(f"No transitions for {rid}/{bid}")
     return [float(v) for v in vals]
 
+
 def thresholds_for_mcu(data: Dict[str, Any], vals: List[float]) -> List[int]:
-    units = data.get("units", "encoder_counts")
+    units = (data.get("units") or "").lower()
     scale = float(data.get("encoder_scale", 1000.0))
     if units == "m":
-        return [int(round(v * scale)) for v in vals]  # mm → counts
+        return [int(round(v * scale)) for v in vals]
     return [int(round(v)) for v in vals]
 
 
-def triggers_from_thresholds(thresholds: List[int], delay_ms: int = 9) -> List[Dict[str, int]]:
+def triggers_from_thresholds(
+    thresholds: List[int],
+    *,
+    delay_s: float = 9.0,
+    first_delay_s: float = 0.0
+) -> List[Dict[str, int]]:
+    """
+    Build MCU triggers using seconds for the delay.
+    First trigger uses first_delay_s (default 0.0s), all others use delay_s (default 9.0s).
+    """
     n = len(thresholds)
     res: List[Dict[str, int]] = []
     for i, th in enumerate(thresholds):
         res.append({
-                       "threshold": th,
+            "threshold": int(th),
             "activate": i,
             "deactivate": (i - 1) % n,
-            "delay": delay_ms
+            "delay": float(first_delay_s if i == 0 else delay_s),  # seconds
         })
     return res
-
-   
