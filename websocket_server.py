@@ -150,6 +150,7 @@ class WebsocketServer():
                         "sources": ["boot_health"],
                         "ts": bh.get("ts_ms"),
                         "boot_checks": bh.get("checks", {}),
+                        "firmware": bh.get("firmware")
                     }
                     self.latest_health = synth
                     await self.responses.put(synth)
@@ -232,6 +233,20 @@ class WebsocketServer():
                 "transitions": self.robot_data["transitions"],
                 "defaults": self.robot_data.get("defaults", {}),
             })
+            return
+        
+        elif t == "get_health":
+            await self.responses.put(
+                self.latest_health or {
+                    "type": "health",
+                    "state": "unknown",
+                    "sources": [],
+                    "ts": None,
+                    "boot": None,
+                    "andon": None,
+                    "firmware": None,
+                }
+            )
             return
 
         elif t == "apply_selection":

@@ -38,17 +38,6 @@ class SerialServer:
         self.mcu_writes.put_nowait({"start_serial": 1})
         self.mcu_writes.put_nowait({"speed0": 0, "speed1": 0, "speed2": 0, "speed3": 0})
         self.mcu_writes.put_nowait({"action": "reset_encoder"})
-        #self.mcu_writes.put_nowait(
-        #                            {"action":"test_actuator_map",
-        #                            "id":"map_ch0",
-        #                            "channel":1,
-        #                            "start_V":0.0,
-        #                            "end_V":5.0,
-        #                            "step_V":0.5,
-        #                            "settle_ms":800,
-        #                            "avg_samples":5,
-        #                            "avg_delay_ms":3})
-
 
 
     # --------------------------

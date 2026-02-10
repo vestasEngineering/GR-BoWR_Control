@@ -15,6 +15,7 @@ class HealthModel:
         self.last_snapshot: Optional[Dict[str, Any]] = None
         self._last_andon: Optional[Dict[str, Any]] = None
         self._last_boot: Optional[Dict[str, Any]] = None
+        self._last_fw: Optional[Dict[str, Any]] = None   # latest firmware object from boot_health
 
     # ---------------------------
     # Public API
@@ -26,6 +27,10 @@ class HealthModel:
         """
         if msg.get("type") == "boot_health":
             self._last_boot = msg
+            fw = msg.get("firmware")
+            if isinstance(fw, dict):
+                self._last_fw = fw
+
         elif msg.get("type") == "andon_diag":
             # MCU sends {"andon_diag": {...}} and serial_server forwards with {'type': 'andon_diag', **diag}
             self._last_andon = msg
@@ -59,7 +64,8 @@ class HealthModel:
             "state": "Unknown",
             "sources": [],
             "andon": None,
-            "boot": None
+            "boot": None,
+            "firmware": None
         }
 
     def _snapshot_from_andon(self, andon: Dict[str, Any], ts: float) -> Dict[str, Any]:
@@ -122,7 +128,8 @@ class HealthModel:
                 "override": andon.get("override", False),
                 "ms": andon.get("ms"),
             },
-            "boot": self._boot_summary(self._last_boot) if self._last_boot else None
+            "boot": self._boot_summary(self._last_boot) if self._last_boot else None,
+            "firmware": self._firmware_summary(self._last_fw),
         }
 
     def _snapshot_from_boot(self, boot: Dict[str, Any], ts: float) -> Dict[str, Any]:
@@ -153,6 +160,8 @@ class HealthModel:
             "sources": src,
             "andon": None,
             "boot": self._boot_summary(boot),
+            "firmware": self._firmware_summary(self._last_fw),
+
         }
 
     @staticmethod
@@ -168,6 +177,31 @@ class HealthModel:
             "ultrasonic_ok": (checks.get("ultrasonic") or {}).get("ok"),
             "ultrasonic_servo_ok": (checks.get("ultrasonic_servo") or {}).get("ok"),
             "battery_ok": (checks.get("battery") or {}).get("ok"),
+        }
+    
+    
+    @staticmethod
+    def _firmware_summary(fw: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not fw:
+            return None
+        feats = (fw.get("features") or {})
+        return {
+            "model": fw.get("model"),
+            "fleet_id": fw.get("fleet_id"),
+            "semver": fw.get("semver"),
+            "build": fw.get("build"),
+            "board": fw.get("board"),
+            "platform": fw.get("platform"),
+            "channel": fw.get("channel"),
+            "git": fw.get("git"),
+            "features": {
+                "andon_light": bool(feats.get("andon_light")),
+                "ultrasonic": bool(feats.get("ultrasonic")),
+                "ultrasonic_servo": bool(feats.get("ultrasonic_servo")),
+                "actuator": bool(feats.get("actuator")),
+                "battery_oled": bool(feats.get("battery_oled")),
+                "motors": bool(feats.get("motors")),
+            },
         }
 
     def _is_changed(self, snapshot: Dict[str, Any]) -> bool:
@@ -199,6 +233,10 @@ class HealthModel:
 
         # specific to module faults
         if (prev.get("fault_modules") or []) != (snapshot.get("fault_modules") or []):
+            return True
+        
+        # firmware changed (e.g., reflash) -> push
+        if (prev.get("firmware") or {}) != (snapshot.get("firmware") or {}):
             return True
 
         return False
