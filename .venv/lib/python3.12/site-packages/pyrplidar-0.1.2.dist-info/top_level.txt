@@ -1,3 +1,0 @@
-pyrplidar
-pyrplidar_protocol
-pyrplidar_serial
