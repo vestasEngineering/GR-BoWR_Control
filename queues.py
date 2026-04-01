@@ -10,7 +10,8 @@ class Queues():
         self.commands = asyncio.Queue(10)
         self.mcu_writes = asyncio.Queue(50)
         self.mcu_reads = asyncio.Queue(10)
-        self.queues = [self.responses, self.commands, self.mcu_reads, self.mcu_writes, self.feedbackSignals] #self.encoder_reads]
+        self.queues = [self.responses, self.commands, self.mcu_reads, self.mcu_writes, self.feedbackSignals] #self.encoder_reads]        
+        self.trigger_acks = asyncio.Queue()
 
     def show_queue_size(self):
         for q in self.queues:

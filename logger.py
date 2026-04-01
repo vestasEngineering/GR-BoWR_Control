@@ -13,13 +13,13 @@ class Logger():
         return str(Logger.__name__)
 
     def define_log_file(self):
-        return os.path.join("logs", ("grlrr_" + str(datetime.now().strftime('%Y-%m-%d %H:%M:%S')) + ".log").replace(" ", "_"))
+        return os.path.join("logs", ("gr-towr_" + str(datetime.now().strftime('%Y-%m-%d %H:%M:%S')) + ".log").replace(" ", "_"))
 
 
     def configure_logger(self):
         logging.basicConfig(filename = self.lf, 
                             level    = logging.INFO, 
-                            format   = '[%(asctime)s] p%(process)s {%(pathname)s:%(lineno)d} %(levelname)-8s %(message)s',
+                            format='[%(asctime)s] %(levelname)s %(filename)s:%(lineno)d %(message)s',
                             datefmt  = '%Y-%m-%d %H:%M:%S')
 
     def get_log_name(self):

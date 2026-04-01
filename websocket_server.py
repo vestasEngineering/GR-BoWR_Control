@@ -53,6 +53,7 @@ class WebsocketServer():
         self.health = HealthModel()
         self.latest_health: Optional[dict] = None
         #self._active_connections = set[WebsocketServerProtocol] = set()
+        self.trigger_acks = queues.trigger_acks
     
     async def run(self):
         # Load robot.list.json once
@@ -89,7 +90,7 @@ class WebsocketServer():
                 clear_first=True,
                 channel_count=channel_count,
                 default_delay_s=None,
-                wait_for_ack=False,
+                wait_for_ack=True,
                 ack_timeout_s=1.5,
             )
 
@@ -468,6 +469,40 @@ class WebsocketServer():
 
         return True, None
 
+    async def drain_trigger_acks(self):
+        while True:
+            try:
+                self.trigger_acks.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    async def wait_for_trigger_ack(self, expected_count: int, timeout_s: float = 1.5):
+        """
+        Wait specifically for {"status":"triggers_loaded","count": expected_count}
+        from the MCU.
+        """
+        deadline = asyncio.get_running_loop().time() + timeout_s
+
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError(
+                    f"Timed out waiting for trigger ACK count={expected_count}"
+                )
+
+            msg = await asyncio.wait_for(self.trigger_acks.get(), timeout=remaining)
+
+            status = str(msg.get("status", "")).lower()
+            count = msg.get("count")
+
+            if status == "triggers_loaded" and count == expected_count:
+                self.logger.log.debug(f"Matched trigger ACK count={count}")
+                return msg
+
+            # Ignore stale / mismatched trigger ACKs
+            self.logger.log.debug(
+                f"Ignoring unexpected trigger ACK: {msg}, expected count={expected_count}"
+            )
 
     async def send_triggers_incrementally(
         self,
@@ -481,10 +516,21 @@ class WebsocketServer():
     ) -> None:
         triggers_list = list(triggers)
 
+        # Clear stale acks before starting a new programming sequence
+        await self.drain_trigger_acks()
+
         # If we’re replacing the table, clear once as a standalone message.
         if clear_first:
             await self.mcu_writes.put({"action": "set_triggers", "clear": True})
             self.logger.log.debug("WS: set_triggers -> {'clear': True}")
+
+            if wait_for_ack:
+                try:
+                    await self.wait_for_trigger_ack(expected_count=0, timeout_s=ack_timeout_s)
+                except asyncio.TimeoutError:
+                    self.logger.log.warning(
+                        "WS: No trigger ACK after clear within timeout; continuing..."
+                    )
 
         if not triggers_list:
             if clear_first:
@@ -500,7 +546,9 @@ class WebsocketServer():
 
             ok, err = self.validate_trigger_for_mcu(t, channel_count=channel_count)
             if not ok:
-                self.logger.log.warning(f"WS: skipping invalid trigger at index {idx}: {err}; trigger={t}")
+                self.logger.log.warning(
+                    f"WS: skipping invalid trigger at index {idx}: {err}; trigger={t}"
+                )
                 continue
 
             payload = {"action": "set_triggers", "trigger": t}
@@ -510,8 +558,14 @@ class WebsocketServer():
             await asyncio.sleep(0)
 
             if wait_for_ack:
+                expected_count = idx + 1
                 try:
-                    resp = await asyncio.wait_for(self.mcu_reads.get(), timeout=ack_timeout_s)
-                    self.logger.log.debug(f"MCU ack: {resp}")
+                    await self.wait_for_trigger_ack(
+                        expected_count=expected_count,
+                        timeout_s=ack_timeout_s,
+                    )
                 except asyncio.TimeoutError:
-                    self.logger.log.warning("WS: No MCU ack for set_triggers within timeout; continuing...")
+                    self.logger.log.warning(
+                        f"WS: No matching trigger ACK for count={expected_count} "
+                        f"within {ack_timeout_s}s; continuing..."
+                    )

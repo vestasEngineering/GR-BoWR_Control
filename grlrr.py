@@ -116,13 +116,11 @@ class Grlrr():
 
 
     async def loop(self):
-        start_time = self.event_loop.time()
         try:
             while True:
-                self.update_state()
-                self.logger.log.debug(self.event_loop.time() - start_time)
-                self.logger.log.debug('main')
-                await asyncio.sleep(0)
+                cmd = await self.qs.commands.get()
+                self.logger.log.debug(f"Main loop received command: {cmd}")
+                self.change_state(cmd)
         except asyncio.CancelledError:
             self.logger.log.info("Main loop cancelled.")
 
