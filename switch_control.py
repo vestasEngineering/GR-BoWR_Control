@@ -1,88 +1,133 @@
-
 #!/usr/bin/env python3
-from gpiozero import Button
-from signal import pause
-import subprocess
-import time
 import os
 import signal
+import subprocess
+import time
+import gpiod
+import sys
+import signal
 
-# ===== Config =====
-SWITCH_PIN = 17
+# =========================
+# Configuration
+# =========================
+GPIO_CHIP = "gpiochip4"   # confirmed from your system
+SWITCH_LINE = 17          # BCM GPIO17
+POLL_S = 0.05
 DEBOUNCE_S = 0.05
-LONG_PRESS_S = 2.0  # hold 2s to stop with SIGINT
 
-START_SCRIPT = "/home/vestas/Documents/Projects/GRLRR_CONTROL/run.sh"
-STOP_SCRIPT  = "/home/vestas/Documents/Projects/GRLRR_CONTROL/stop.sh"
+APP_DIR = "/home/gr-towr/Documents/GR-LRR_Control"
+APP_PYTHON = f"{APP_DIR}/.venv/bin/python3"
+MAIN_SCRIPT = f"{APP_DIR}/main.py"
+MAIN_SERVICE = "grlrr-main.service"
 
-# ===== State =====
+# =========================
+# State
+# =========================
 app_process = None
-server_running = False
-press_t0 = [0.0]
+last_raw = None
+stable_state = None
+last_change_t = 0.0
 
-print("Monitoring button on GPIO17 (short=start, long=stop)")
 
-def start_server():
-    global app_process, server_running
-    if server_running:
-        print("Already running; ignoring start.")
+
+def is_app_running():
+    result = subprocess.run(
+        ["/bin/systemctl", "is-active", "--quiet", MAIN_SERVICE],
+        check=False
+    )
+    return result.returncode == 0
+
+def start_app():
+    if is_app_running():
+        print("App already running; ignoring start.")
         return
-    try:
-        # Start run.sh asynchronously.
-        # Because run.sh uses `exec python ...`, app_process will be the main.py proc.
-        app_process = subprocess.Popen(["bash", START_SCRIPT])
-        server_running = True
-        print("Start: server starting...")
-    except Exception as e:
-        print(f"Failed to start server: {e}")
 
-def stop_server_via_sigint():
-    global app_process, server_running
-    if not server_running:
-        print("Not running; ignoring stop.")
-        return
-    print("Long press: stopping server with SIGINT...")
-    try:
-        # Primary path: use stop.sh (pkill -INT by path)
-        subprocess.run(["bash", STOP_SCRIPT], check=False)
-
-        # If we still have a live handle, ensure it exits
-        if app_process and app_process.poll() is None:
-            try:
-                # First, try a polite SIGINT to the exact process we launched
-                app_process.send_signal(signal.SIGINT)
-            except Exception:
-                pass
-            # Wait briefly; if still running, escalate
-            try:
-                app_process.wait(timeout=5)
-            except Exception:
-                app_process.terminate()
-                try:
-                    app_process.wait(timeout=3)
-                except Exception:
-                    app_process.kill()
-
-        server_running = False
-        app_process = None
-        print("Server stopped.")
-    except Exception as e:
-        print(f"Failed to stop server: {e}")
-
-def on_pressed():
-    press_t0[0] = time.monotonic()
-
-def on_released():
-    dt = time.monotonic() - press_t0[0]
-    if dt >= LONG_PRESS_S:
-        # Long press → stop
-        stop_server_via_sigint()
+    result = subprocess.run(
+        ["/bin/systemctl", "--no-block", "start", MAIN_SERVICE],
+        check=False
+    )
+    if result.returncode == 0:
+        print("App started.")
     else:
-        # Short press → start (only if not already running)
-        start_server()
+        print(f"Failed to start app (rc={result.returncode}).")
 
-button = Button(SWITCH_PIN, pull_up=True, bounce_time=DEBOUNCE_S)
-button.when_pressed  = on_pressed
-button.when_released = on_released
+def stop_app():
+    if not is_app_running():
+        print("App not running; ignoring stop.")
+        return
 
-pause()
+    result = subprocess.run(
+        ["/bin/systemctl", "--no-block", "stop", MAIN_SERVICE],
+        check=False
+    )
+    if result.returncode == 0:
+        print("App stopped.")
+    else:
+        print(f"Failed to stop app (rc={result.returncode}).")
+
+
+def apply_switch_state(closed_to_gnd: bool):
+    """
+    With bias pull-up enabled:
+      line value 1 -> switch open  -> OFF
+      line value 0 -> switch closed -> ON
+
+    So closed_to_gnd == True means "switch ON" for your latch.
+    """
+    if closed_to_gnd:
+        print("Switch is ON/closed -> start app")
+        start_app()
+    else:
+        print("Switch is OFF/open -> stop app")
+        stop_app()
+
+def handle_exit(signum, frame):
+    print(f"Received signal {signum}, exiting monitor...")
+    sys.exit(0)
+
+def main():
+    global last_raw, stable_state, last_change_t
+
+    chip = gpiod.Chip(GPIO_CHIP)
+    line = chip.get_line(SWITCH_LINE)
+
+    line.request(
+        consumer="grlrr-switch-monitor",
+        type=gpiod.LINE_REQ_DIR_IN,
+        flags=gpiod.LINE_REQ_FLAG_BIAS_PULL_UP
+    )
+
+    print(f"Monitoring {GPIO_CHIP} line {SWITCH_LINE} as latching switch")
+
+    try:
+        # Initial read on boot
+        raw = line.get_value()   # 1=open/OFF, 0=closed/ON
+        last_raw = raw
+        stable_state = raw
+        last_change_t = time.monotonic()
+
+        apply_switch_state(closed_to_gnd=(stable_state == 0))
+
+        # Continuous monitoring with software debounce
+        while True:
+            raw = line.get_value()
+            now = time.monotonic()
+
+            if raw != last_raw:
+                last_raw = raw
+                last_change_t = now
+
+            if raw != stable_state and (now - last_change_t) >= DEBOUNCE_S:
+                stable_state = raw
+                apply_switch_state(closed_to_gnd=(stable_state == 0))
+
+            time.sleep(POLL_S)
+
+    finally:
+        line.release()
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, handle_exit)
+    signal.signal(signal.SIGINT, handle_exit)
+    main()

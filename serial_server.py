@@ -294,9 +294,11 @@ class SerialServer:
 
                     try:
                         msg_dict = json.loads(text)
-                        self.logger.log.info(
-                            f"MCU RX: {json.dumps(msg_dict, separators=(',', ':'))}"
-                        )
+                        if msg_dict.get("type") != "encoder":
+                            self.logger.log.info(
+                                f"MCU RX: {json.dumps(msg_dict, separators=(',', ':'))}"
+                            )
+
                     except json.JSONDecodeError as e:
                         self.logger.log.error(f"JSON decode error: {e} - Raw line: {text!r}")
                         continue
@@ -366,6 +368,12 @@ class SerialServer:
                         )
 
                     elif msg_dict.get("type") == "test_result":
+                        await self.mcu_reads.put(msg_dict)
+
+                    elif msg_dict.get("type") == "encoder":
+                        await self.mcu_reads.put(msg_dict)
+
+                    elif msg_dict.get("type") in ("encoder_reset", "encoder_set"):
                         await self.mcu_reads.put(msg_dict)
 
                     else:

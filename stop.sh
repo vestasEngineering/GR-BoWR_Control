@@ -2,7 +2,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP="/home/vestas/Documents/Projects/GRLRR_CONTROL/main.py"
+APP="/home/vestas/Documents/Projects/GR-LRR_CONTROL/main.py"
 
 # Send SIGINT (Ctrl+C) to all matches of main.py
 pkill -INT -f "$APP" || true

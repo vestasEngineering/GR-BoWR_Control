@@ -141,6 +141,14 @@ class WebsocketServer():
                     await self.responses.put(msg)
                     continue
 
+                if isinstance(msg, dict) and msg.get("type") == "encoder":
+                    await self.responses.put(msg)
+                    continue
+
+                if isinstance(msg, dict) and msg.get("type") in ("encoder_reset", "encoder_set"):
+                    await self.responses.put(msg)
+                    continue
+
                 # 2) Quick synthesis from boot_health (immediate snapshot for HMI)
                 if isinstance(msg, dict) and msg.get("type") == "boot_health":
                     bh = msg
@@ -223,6 +231,103 @@ class WebsocketServer():
         cmd = json.loads(packet)
 
         t = cmd.get("type")
+        action = cmd.get("action")
+
+        # ----------------------------------------------------------
+        # HMI WebSocket heartbeat
+        # ----------------------------------------------------------
+        if t == "ping":
+            await self.responses.put({
+                "type": "pong",
+                "ts": cmd.get("ts"),
+            })
+            return
+        
+        if t == "reset_encoder":
+            await self.mcu_writes.put({
+                "action": "reset_encoder"
+            })
+            return
+
+        if t == "set_encoder":
+            try:
+                radius_m = float(cmd.get("radius_m", 0.0))
+            except Exception:
+                await self.responses.put({
+                    "type": "error",
+                    "error": "bad_encoder_value",
+                    "details": f"radius_m={cmd.get('radius_m')}"
+                })
+                return
+
+            if radius_m < 0:
+                await self.responses.put({
+                    "type": "error",
+                    "error": "bad_encoder_value",
+                    "details": "radius_m must be >= 0"
+                })
+                return
+
+            await self.mcu_writes.put({
+                "action": "set_encoder",
+                "radius_m": radius_m
+            })
+            return
+
+        # ----------------------------------------------------------
+        # Direct MCU passthrough commands from HMI
+        # ----------------------------------------------------------
+
+        if action == "jog":
+            direction = cmd.get("dir")
+            if direction not in ("forward", "backward"):
+                await self.responses.put({
+                    "type": "error",
+                    "id": "jog",
+                    "error": "invalid_direction",
+                    "details": f"dir={direction}",
+                })
+                return
+
+            try:
+                speed = float(cmd.get("speed", 0.02))
+            except Exception:
+                speed = 0.02
+
+            try:
+                lease_ms = int(cmd.get("lease_ms", 250))
+            except Exception:
+                lease_ms = 250
+
+            try:
+                seq = int(cmd.get("seq", 0))
+            except Exception:
+                seq = 0
+
+            speed = max(0.0, min(speed, 0.02))
+            lease_ms = max(1, min(lease_ms, 500))
+
+            await self.mcu_writes.put({
+                "action": "jog",
+                "dir": direction,
+                "speed": speed,
+                "lease_ms": lease_ms,
+                "seq": seq,
+            })
+            return
+
+        if action == "jog_stop":
+            try:
+                seq = int(cmd.get("seq", 0))
+            except Exception:
+                seq = 0
+
+            await self.mcu_writes.put({
+                "action": "jog_stop",
+                "seq": seq,
+            })
+            return
+
 
         if t == "get_robot_list":
             # Send current list to HMI
