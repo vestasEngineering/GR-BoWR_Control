@@ -9,9 +9,12 @@ from typing import Iterable
 from robot_list import (
     load_robot_list, save_robot_list,
     get_defaults, get_transitions,
-    thresholds_for_mcu, triggers_from_thresholds
+    thresholds_for_mcu, triggers_from_thresholds, mps_to_qpps, qpps_to_mps
 )
 from health import HealthModel
+
+WHEEL_DIAMETER_M = 0.048
+ENCODER_CPR = 4096
 
 MODULES = [
     # Motors (axes 0..3)
@@ -64,11 +67,18 @@ class WebsocketServer():
             self.logger.log.exception(f"Failed to load robot.list.json: {e}")
             # Minimal fallback
             self.robot_data = {
-                "version": 1, "units": "encoder_counts", "encoder_scale": 1.0,
+                "version": 1,
+                "units": "encoder_counts",
+                "encoder_scale": 1.0,
                 "robots": [{"id": "robotA", "name": "Default", "channels": 4}],
                 "blade_types": [{"id": "bladeX", "name": "Default", "max_transitions": 4}],
                 "transitions": {"robotA": {"bladeX": [0, 1150, 2300, 3450]}},
-                "defaults": {"robot_id": "robotA", "blade_id": "bladeX"}
+                "defaults": {"robot_id": "robotA", "blade_id": "bladeX"},
+                "motor_tuning": {
+                    "max_speed_qpps": 2500,
+                    "accel_qpps_s": 4250,
+                    "decel_qpps_s": 8500
+                }
             }
 
         # Apply defaults to MCU
@@ -93,15 +103,54 @@ class WebsocketServer():
                 wait_for_ack=True,
                 ack_timeout_s=1.5,
             )
-
-            await self.responses.put({
-                "type": "robot_list",
-                "v": self.robot_data.get("version", 1),
-                "robots": self.robot_data["robots"],
-                "blade_types": self.robot_data["blade_types"],
-                "transitions": self.robot_data["transitions"],
-                "defaults": self.robot_data.get("defaults", {})
+            mt = self.robot_data.get("motor_tuning", {
+                "max_speed_qpps": 2500,
+                "accel_qpps_s": 4250,
+                "decel_qpps_s": 8500
             })
+
+            # Backward compatibility for older robot.list.json files
+            mt.setdefault("max_speed_qpps", 2500)
+            mt.setdefault("accel_qpps_s", 4250)
+            mt.setdefault("decel_qpps_s", 8500)
+
+            # Convert accel/decel back to physical units for the ultrasonic PID slew limiter
+            accel_mps2 = qpps_to_mps(
+                int(mt["accel_qpps_s"]),
+                WHEEL_DIAMETER_M,
+                ENCODER_CPR
+            )
+
+            decel_mps2 = qpps_to_mps(
+                int(mt["decel_qpps_s"]),
+                WHEEL_DIAMETER_M,
+                ENCODER_CPR
+            )
+
+            await self.mcu_writes.put({
+                "action": "set_motor_tuning",
+
+                # Hardware/RoboClaw-style limits
+                "max_speed": int(mt["max_speed_qpps"]),
+                "accel": int(mt["accel_qpps_s"]),
+                "decel": int(mt["decel_qpps_s"]),
+
+                # Physical-unit limits used by Ultrasonic PID slew limiter
+                "accel_mps2": accel_mps2,
+                "decel_mps2": decel_mps2,
+            })
+
+            await self.apply_motor_direction_to_mcu()
+
+            self.logger.log.info(
+                f"WS: applied motor tuning "
+                f"max_speed_qpps={mt['max_speed_qpps']} "
+                f"accel_qpps_s={mt['accel_qpps_s']} "
+                f"decel_qpps_s={mt['decel_qpps_s']} "
+                f"accel_mps2={accel_mps2:.4f} "
+                f"decel_mps2={decel_mps2:.4f}"
+            )
+
             await self.responses.put({
                 "type": "selection_applied",
                 "robot_id": rid, "blade_id": bid, "thresholds": thresholds
@@ -165,6 +214,13 @@ class WebsocketServer():
                     await self.responses.put(synth)
                     self.logger.log.info(f"[HEALTH/SYNTH] from boot_health state={state}")
                     # Don't 'continue'—also let HealthModel see it below
+                    
+                if isinstance(msg, dict) and msg.get("type") == "fw_version":
+                    new_snap = self.health.update_from_mcu(msg)
+                    if new_snap:
+                        self.latest_health = new_snap
+                        await self.responses.put(new_snap)
+                    continue
 
                 # 3) Optional: map andon_diag to a minimal health (keeps UI lively)
                 if isinstance(msg, dict) and msg.get("type") == "andon_diag":
@@ -331,14 +387,65 @@ class WebsocketServer():
 
         if t == "get_robot_list":
             # Send current list to HMI
+            mt = self.robot_data.get("motor_tuning", {
+                "max_speed_qpps": 2500,
+                "accel_qpps_s": 4250,
+                "decel_qpps_s": 8500
+            })
+
             await self.responses.put({
                 "type": "robot_list",
-                "v": self.robot_data.get("version", 1),
                 "robots": self.robot_data["robots"],
                 "blade_types": self.robot_data["blade_types"],
                 "transitions": self.robot_data["transitions"],
                 "defaults": self.robot_data.get("defaults", {}),
+                "motor_tuning": {
+                    "max_speed_mps": qpps_to_mps(
+                        mt["max_speed_qpps"], WHEEL_DIAMETER_M, ENCODER_CPR
+                    ),
+                    "accel_mps2": qpps_to_mps(
+                        mt["accel_qpps_s"], WHEEL_DIAMETER_M, ENCODER_CPR
+                    ),
+                    "decel_mps2": qpps_to_mps(
+                        mt["decel_qpps_s"], WHEEL_DIAMETER_M, ENCODER_CPR
+                    ),
+                },
+                "motor_direction": self.get_motor_direction(),
             })
+            return
+
+        elif t == "set_motor_direction":
+            try:
+                directions = cmd.get("directions")
+                if not isinstance(directions, dict):
+                    raise ValueError("directions must be an object")
+
+                clean = {}
+                for key in ("motor_1", "motor_2", "motor_3", "motor_4"):
+                    val = directions.get(key)
+                    if val not in (-1, 1):
+                        val = int(val)
+                    clean[key] = -1 if val < 0 else 1
+
+                self.robot_data["motor_direction"] = clean
+                save_robot_list(self.robot_data)
+
+                await self.apply_motor_direction_to_mcu()
+
+                await self.responses.put({
+                    "type": "ack",
+                    "ok": True,
+                    "info": "motor_direction_saved",
+                    "motor_direction": clean,
+                })
+
+            except Exception as e:
+                await self.responses.put({
+                    "type": "error",
+                    "error": "motor_direction_failed",
+                    "details": str(e),
+                })
+
             return
         
         elif t == "get_health":
@@ -353,6 +460,18 @@ class WebsocketServer():
                     "firmware": None,
                 }
             )
+            return
+
+        elif t == "get_firmware":
+            await self.mcu_writes.put({
+                "action": "get_firmware"
+            })
+
+            await self.responses.put({
+                "type": "ack",
+                "ok": True,
+                "info": "firmware_refresh_requested"
+            })
             return
 
         elif t == "apply_selection":
@@ -423,13 +542,29 @@ class WebsocketServer():
                 )
 
                 await self.responses.put({"type": "ack", "ok": True, "info": "saved"})
+                mt = self.robot_data.get("motor_tuning", {
+                    "max_speed_qpps": 2500,
+                    "accel_qpps_s": 4250,
+                    "decel_qpps_s": 8500
+                })
+
                 await self.responses.put({
                     "type": "robot_list",
-                    "v": self.robot_data.get("version", 1),
                     "robots": self.robot_data["robots"],
                     "blade_types": self.robot_data["blade_types"],
                     "transitions": self.robot_data["transitions"],
                     "defaults": self.robot_data.get("defaults", {}),
+                    "motor_tuning": {
+                        "max_speed_mps": qpps_to_mps(
+                            mt["max_speed_qpps"], WHEEL_DIAMETER_M, ENCODER_CPR
+                        ),
+                        "accel_mps2": qpps_to_mps(
+                            mt["accel_qpps_s"], WHEEL_DIAMETER_M, ENCODER_CPR
+                        ),
+                        "decel_mps2": qpps_to_mps(
+                            mt["decel_qpps_s"], WHEEL_DIAMETER_M, ENCODER_CPR
+                        ),
+                    },
                 })
                 await self.responses.put({
                     "type": "selection_applied",
@@ -448,6 +583,75 @@ class WebsocketServer():
 
         elif t == "get_modules":
             await self.responses.put({"type": "modules", "items": MODULES})
+            return
+        
+        elif t == "set_motor_tuning":
+            try:
+                # HMI sends physical units
+                max_speed_mps = float(cmd.get("max_speed"))
+                accel_mps2 = float(cmd.get("accel"))
+                decel_mps2 = float(cmd.get("decel"))
+
+                if max_speed_mps < 0:
+                    raise ValueError("max_speed must be >= 0")
+                if accel_mps2 < 0:
+                    raise ValueError("accel must be >= 0")
+                if decel_mps2 < 0:
+                    raise ValueError("decel must be >= 0")
+
+                # Convert to MCU/RoboClaw units
+                max_speed_qpps = mps_to_qpps(
+                    max_speed_mps,
+                    WHEEL_DIAMETER_M,
+                    ENCODER_CPR
+                )
+
+                accel_qpps = mps_to_qpps(
+                    accel_mps2,
+                    WHEEL_DIAMETER_M,
+                    ENCODER_CPR
+                )
+
+                decel_qpps = mps_to_qpps(
+                    decel_mps2,
+                    WHEEL_DIAMETER_M,
+                    ENCODER_CPR
+                )
+
+                # Persist hardware units
+                self.robot_data["motor_tuning"] = {
+                    "max_speed_qpps": max_speed_qpps,
+                    "accel_qpps_s": accel_qpps,
+                    "decel_qpps_s": decel_qpps
+                }
+
+                save_robot_list(self.robot_data)
+
+                # Apply immediately to MCU
+                await self.mcu_writes.put({
+                    "action": "set_motor_tuning",
+                    "max_speed": max_speed_qpps,
+                    "accel": accel_qpps,
+                    "decel": decel_qpps,
+
+                    # Also send physical units for PID slew limiting
+                    "accel_mps2": accel_mps2,
+                    "decel_mps2": decel_mps2
+                })
+
+                await self.responses.put({
+                    "type": "ack",
+                    "ok": True,
+                    "info": "motor_tuning_saved"
+                })
+
+            except Exception as e:
+                await self.responses.put({
+                    "type": "error",
+                    "error": "motor_tuning_failed",
+                    "details": str(e)
+                })
+
             return
 
         elif t == "test_module":
@@ -516,6 +720,42 @@ class WebsocketServer():
             if r.get("id") == robot_id:
                 return r.get("channels")
         return None
+
+    def get_motor_direction(self) -> Dict[str, int]:
+        md = self.robot_data.get("motor_direction", {
+            "motor_1": 1,
+            "motor_2": -1,
+            "motor_3": -1,
+            "motor_4": 1,
+        })
+
+        clean = {}
+        for key, default in {
+            "motor_1": 1,
+            "motor_2": -1,
+            "motor_3": -1,
+            "motor_4": 1,
+        }.items():
+            val = md.get(key, default)
+            clean[key] = -1 if int(val) < 0 else 1
+
+        return clean
+
+
+    async def apply_motor_direction_to_mcu(self):
+        md = self.get_motor_direction()
+
+        await self.mcu_writes.put({
+            "action": "set_motor_direction",
+            "directions": [
+                md["motor_1"],
+                md["motor_2"],
+                md["motor_3"],
+                md["motor_4"],
+            ],
+        })
+
+        self.logger.log.info(f"WS: applied motor direction {md}")
 
     @staticmethod
     def normalize_trigger_for_mcu(trig: Dict[str, Any], *, default_delay_s: Optional[float] = None) -> Dict[str, Any]:

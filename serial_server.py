@@ -310,6 +310,9 @@ class SerialServer:
                     elif 'feedback' in msg_dict:
                         await self.feedback_reads.put(msg_dict['feedback'])
 
+                    elif msg_dict.get("type") == "fw_version":
+                        await self.mcu_reads.put(msg_dict)
+
                     elif 'encoder_distance' in msg_dict:
                         await self.encoder_distance.put(msg_dict['encoder_distance'])
 

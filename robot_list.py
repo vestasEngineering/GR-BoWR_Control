@@ -1,6 +1,7 @@
 import json, os, tempfile
 from typing import Dict, Any, List, Tuple
 from pathlib import Path
+import math
 
 PATH = Path(__file__).with_name("robot.list.json")
 
@@ -92,3 +93,15 @@ def triggers_from_thresholds(
             "delay": float(first_delay_s if i == 0 else delay_s),  # seconds
         })
     return res
+
+    
+def mps_to_qpps(mps: float, wheel_diameter_m: float, encoder_cpr: int) -> int:
+    wheel_circ = math.pi * wheel_diameter_m
+    revs_per_sec = mps / wheel_circ
+    return int(round(revs_per_sec * encoder_cpr))
+
+
+def qpps_to_mps(qpps: int, wheel_diameter_m: float, encoder_cpr: int) -> float:
+    wheel_circ = math.pi * wheel_diameter_m
+    revs_per_sec = qpps / encoder_cpr
+    return revs_per_sec * wheel_circ

@@ -31,6 +31,9 @@ class HealthModel:
             if isinstance(fw, dict):
                 self._last_fw = fw
 
+        elif msg.get("type") == "fw_version":
+            self._last_fw = msg
+
         elif msg.get("type") == "andon_diag":
             # MCU sends {"andon_diag": {...}} and serial_server forwards with {'type': 'andon_diag', **diag}
             self._last_andon = msg
