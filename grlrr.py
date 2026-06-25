@@ -7,6 +7,8 @@ from april_tag_detector import AprilTagDetector
 import asyncio
 import signal
 import sys
+import plot_ultrasonic
+
 
 class Grlrr():
     def __init__(self):
@@ -68,7 +70,9 @@ class Grlrr():
         self.event_loop.create_task(self.ss.run())
         self.event_loop.create_task(self.detector.run())
         #self.event_loop.create_task(self.monitor_andon_diag())
-
+        self.event_loop.create_task(
+            plot_ultrasonic.run(self.qs.ultrasonic_dbg)
+        )
 
     def get_command(self):
         try:
@@ -146,3 +150,4 @@ class Grlrr():
                     # await self.wss.broadcast_json({"andon": msg})
             except Exception as e:
                 self.logger.log.error(f"monitor_andon_diag error: {e}")
+

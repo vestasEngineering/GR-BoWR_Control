@@ -23,6 +23,8 @@ class SerialServer:
         self.feedback_reads = queues.feedbackSignals
         self.encoder_distance = queues.encoder_distance
         self.trigger_acks = queues.trigger_acks
+        self.ultrasonic_dbg = queues.ultrasonic_dbg
+        self.ultrasonic_log_path = self._build_ultrasonic_log_path()
 
         # State
         self.last_andon_code: Optional[int] = None
@@ -41,6 +43,58 @@ class SerialServer:
         self.mcu_writes.put_nowait({"speed0": 0, "speed1": 0, "speed2": 0, "speed3": 0})
         self.mcu_writes.put_nowait({"action": "reset_encoder"})
 
+    def log_ultrasonic(self, msg):
+        import os, csv
+
+        log_file = self.ultrasonic_log_path
+
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+        file_exists = os.path.isfile(log_file)
+
+        with open(log_file, mode='a', newline='') as f:
+
+            if not file_exists:
+                f.write("# Ultrasonic debug log\n")
+                f.write(f"# File: {log_file}\n")
+                f.write("\n")
+
+            writer = csv.writer(f)
+
+            if not file_exists:
+                writer.writerow([
+                    "t_ms",
+                    "meas_mm",
+                    "filt_mm",
+                    "sp_mm",
+                    "err_mm",
+                    "target_ms",
+                    "process_ms",
+                    "state",
+                    "bad",
+                    "qpps0",
+                    "qpps1",
+                    "qpps2",
+                    "qpps3"
+                ])
+
+            qpps = msg.get("qpps", [0, 0, 0, 0])
+
+            writer.writerow([
+                msg.get("t_ms"),
+                msg.get("meas_mm"),
+                msg.get("filt_mm"),
+                msg.get("sp_mm"),
+                msg.get("err_mm"),
+                msg.get("target_ms"),
+                msg.get("process_ms"),
+                msg.get("state"),
+                msg.get("bad"),
+                qpps[0],
+                qpps[1],
+                qpps[2],
+                qpps[3],
+            ])
 
     # --------------------------
     # Port management
@@ -266,6 +320,16 @@ class SerialServer:
         self._rx_buf = buf
         return outs
 
+    def _build_ultrasonic_log_path(self):
+        import os
+
+        base_log = getattr(self.logger, "lf", None)
+
+        if not base_log:
+            return os.path.join("logs", "ultrasonic_fallback.csv")
+
+        base_no_ext = os.path.splitext(base_log)[0]
+        return base_no_ext + "_ultrasonic.csv"
 
     async def receive(self):
         """Read newline-delimited JSON messages from MCU until disconnect."""
@@ -294,7 +358,7 @@ class SerialServer:
 
                     try:
                         msg_dict = json.loads(text)
-                        if msg_dict.get("type") != "encoder":
+                        if msg_dict.get("type") not in ("encoder", "ultrasonic_dbg"):
                             self.logger.log.info(
                                 f"MCU RX: {json.dumps(msg_dict, separators=(',', ':'))}"
                             )
@@ -372,6 +436,12 @@ class SerialServer:
 
                     elif msg_dict.get("type") == "test_result":
                         await self.mcu_reads.put(msg_dict)
+
+                    elif msg_dict.get("type") == "ultrasonic_dbg":
+                        await self.mcu_reads.put(msg_dict)
+                        await self.ultrasonic_dbg.put(msg_dict)      
+                        self.log_ultrasonic(msg_dict)
+
 
                     elif msg_dict.get("type") == "encoder":
                         await self.mcu_reads.put(msg_dict)

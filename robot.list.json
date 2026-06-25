@@ -9,8 +9,8 @@
     "motor_4": 1
   },
   "motor_tuning": {
-    "max_speed_qpps": 2499,
-    "accel_qpps_s": 54325,
+    "max_speed_qpps": 13581,
+    "accel_qpps_s": 10865,
     "decel_qpps_s": 271624
   },
   "robots": [
