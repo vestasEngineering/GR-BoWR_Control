@@ -4,40 +4,118 @@ from queues import Queues
 from websocket_server import WebsocketServer
 from serial_server import SerialServer
 from april_tag_detector import AprilTagDetector
+from job_manager import JobManager
+from event_logger import EventLogger
+from database_service import DatabaseService
 import asyncio
 import signal
-import sys
-import plot_ultrasonic
 
 
 class Grlrr():
     def __init__(self):
         self.logger = Logger()
+
+        self.db = DatabaseService()
+
+        self.job_manager = JobManager(
+            db=self.db
+        )
+
+        restored_job = (
+            self.job_manager.get_active_job()
+        )
+
+        if restored_job is not None:
+            self.logger.log.warning(
+                "Restored active job from database: "
+                f"job_uuid="
+                f"{restored_job['job_uuid']} "
+                f"state="
+                f"{restored_job['state']}"
+            )
+
+        self.event_logger = EventLogger(
+            db=self.db
+        )
+
         self.qs = Queues()
-        self.log_server = LogServer(logger=self.logger)
-        self.wss = WebsocketServer(logger=self.logger, queues=self.qs)
-        self.ss = SerialServer(logger=self.logger, queues=self.qs)
-        self.detector = AprilTagDetector(queues=self.qs, rtsp_url="rtsp://vestas:vestasvestas@192.168.8.164:554/stream1")
+
+        self.log_server = LogServer(
+            logger=self.logger
+        )
+
+        self.wss = WebsocketServer(
+            logger=self.logger,
+            queues=self.qs,
+            job_manager=self.job_manager,
+        )
+
+        self.ss = SerialServer(
+            logger=self.logger,
+            queues=self.qs,
+        )
+
+        self.detector = AprilTagDetector(
+            queues=self.qs,
+            rtsp_url=(
+                "rtsp://vestas:vestasvestas@"
+                "192.168.8.164:554/stream1"
+            ),
+        )
+
         self.logger.log.info("grlrr init")
         self.cmd = 'initialize_robot'
         self.integration_tasks = []
-        signal.signal(signal.SIGINT, self.teardown)
+
+        self.event_logger.log(
+            "INFO",
+            "application_start",
+            "GRLRR application started"
+        )
+        
 
 
     async def teardown(self):
-        self.logger.log.info("SIGINT received. Shutting down...")
+        self.logger.log.info(
+            "Shutdown requested."
+        )
 
-        # Cancel main loop
-        if hasattr(self, 'loop_task'):
+        self.event_logger.log(
+            "INFO",
+            "application_shutdown",
+            "GRLRR application is shutting down",
+        )
+
+        if hasattr(self, "loop_task"):
             self.loop_task.cancel()
-            self.logger.log.info("Main loop cancelled.")
 
-        # Shutdown serial server
-        await self.ss.shutdown()
-   
-        # Final exit
-        self.logger.log.info("Teardown complete. Exiting process.")
-        sys.exit(0)
+        try:
+            await self.ss.shutdown()
+        except Exception:
+            self.logger.log.exception(
+                "Serial shutdown failed."
+            )
+
+        try:
+            await self.wss.flush_encoder_checkpoint()
+
+        except Exception:
+            self.logger.log.exception(
+                "Final encoder checkpoint flush failed."
+            )
+
+        try:
+            self.db.close()
+        except Exception:
+            self.logger.log.exception(
+                "Database close failed."
+            )
+
+        self.wss.shutdown_event.set()
+
+        self.logger.log.info(
+            "Teardown complete."
+        )
 
     '''
     async def cli_listener(self):
@@ -62,18 +140,30 @@ class Grlrr():
     '''
 
     def setup(self):
-        self.qs.commands.put_nowait({'initialize_robot':1})
-        self.event_loop = asyncio.get_running_loop()
+        self.install_signal_handlers()
 
-        self.logger.log.info('grlrr setup')
-        self.event_loop.create_task(self.wss.run())
-        self.event_loop.create_task(self.ss.run())
-        self.event_loop.create_task(self.detector.run())
-        #self.event_loop.create_task(self.monitor_andon_diag())
-        self.event_loop.create_task(
-            plot_ultrasonic.run(self.qs.ultrasonic_dbg)
+        self.qs.commands.put_nowait(
+            {
+                "initialize_robot": 1,
+            }
         )
 
+        self.event_loop = asyncio.get_running_loop()
+
+        self.logger.log.info("grlrr setup")
+
+        self.event_loop.create_task(
+            self.wss.run()
+        )
+
+        self.event_loop.create_task(
+            self.ss.run()
+        )
+
+        self.event_loop.create_task(
+            self.detector.run()
+        )
+        
     def get_command(self):
         try:
             return self.qs.commands.get_nowait()
@@ -151,3 +241,16 @@ class Grlrr():
             except Exception as e:
                 self.logger.log.error(f"monitor_andon_diag error: {e}")
 
+    def install_signal_handlers(self) -> None:
+        loop = asyncio.get_running_loop()
+
+        for sig in (
+            signal.SIGINT,
+            signal.SIGTERM,
+        ):
+            loop.add_signal_handler(
+                sig,
+                lambda: asyncio.create_task(
+                    self.teardown()
+                ),
+            )

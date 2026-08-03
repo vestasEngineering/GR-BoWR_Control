@@ -27,18 +27,18 @@
   ],
   "blade_types": [
     {
-      "id": "V150",
-      "name": "V150",
-      "max_transitions": 4
-    },
-    {
       "id": "V163",
       "name": "V163",
       "max_transitions": 4
     },
     {
-      "id": "V172",
-      "name": "V172",
+      "id": "V236",
+      "name": "V236",
+      "max_transitions": 4
+    },
+    {
+      "id": "V150",
+      "name": "V150",
       "max_transitions": 4
     },
     {
@@ -47,8 +47,8 @@
       "max_transitions": 4
     },
     {
-      "id": "V236",
-      "name": "V236",
+      "id": "V172",
+      "name": "V172",
       "max_transitions": 4
     },
     {
@@ -131,6 +131,6 @@
   },
   "defaults": {
     "robot_id": "GR-LRR",
-    "blade_id": "TestBlade"
+    "blade_id": "V236"
   }
 }

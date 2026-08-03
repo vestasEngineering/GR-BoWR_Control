@@ -23,6 +23,8 @@ class SerialServer:
         self.feedback_reads = queues.feedbackSignals
         self.encoder_distance = queues.encoder_distance
         self.trigger_acks = queues.trigger_acks
+        self.encoder_acks = queues.encoder_acks
+        self.mcu_ready = queues.mcu_ready
         self.ultrasonic_dbg = queues.ultrasonic_dbg
         self.ultrasonic_log_path = self._build_ultrasonic_log_path()
 
@@ -39,9 +41,7 @@ class SerialServer:
         self._rx_buf: str = ""
 
         # Initial startup messages (queued; will be sent after first connect)
-        self.mcu_writes.put_nowait({"action": "ping"})
         self.mcu_writes.put_nowait({"speed0": 0, "speed1": 0, "speed2": 0, "speed3": 0})
-        self.mcu_writes.put_nowait({"action": "reset_encoder"})
 
     def log_ultrasonic(self, msg):
         import os, csv
@@ -115,6 +115,7 @@ class SerialServer:
             connected_device = serial.Serial(dev, 115200, timeout=0.2)
             if connected_device.is_open:
                 self.logger.log.info(f"serial connected to {dev}")
+                self.logger.log.info("MCU connection established")
                 return connected_device
             else:
                 self.logger.log.error("Serial port failed to open (unknown reason).")
@@ -155,53 +156,201 @@ class SerialServer:
     # Lifecycle
     # --------------------------
     async def run(self):
-        """Auto-reconnect loop: connect → run send/receive/heartbeat → cleanup → retry."""
+        """
+        Auto-reconnect loop:
+
+            connect
+            publish restored boundary
+            run send/receive/heartbeat
+            publish unexpected loss boundary
+            clean up
+            retry
+        """
         backoff = 1.0
+
         while not self._stopping:
-            # 1) Detect & connect
+            # 1) Detect and connect.
             ports = self.detect_serial()
             self.mcu = self.connect_serial(ports)
 
             if not self.mcu:
-                self.logger.log.info(f"No device. Retry in {backoff:.1f}s...")
+                self.logger.log.info(
+                    f"No device. Retry in {backoff:.1f}s..."
+                )
+
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 1.5, 10.0)  # capped backoff
+                backoff = min(
+                    backoff * 1.5,
+                    10.0,
+                )
                 continue
 
-            # Connected
+            # A serial port has been opened successfully.
             backoff = 1.0
-            #self.clear_serial()
-            self._rx_buf = ""  # reset RX buffer
+            self._rx_buf = ""
+            self.mcu_ready.clear()
 
-            # 2) Spawn tasks
-            self.send_task = asyncio.create_task(self.send())
-            self.receive_task = asyncio.create_task(self.receive())
-            await asyncio.sleep(1.0)
+            self.encoder_runtime_events = asyncio.Queue()
 
-            # (A) heartbeat task keeps MCU comms alive
-            self.heartbeat_task = asyncio.create_task(self.heartbeat(period_s=1.5))
+            # Publish exactly one connection-restored boundary for this
+            # serial session. WebsocketServer.health_pump() will persist
+            # it against the active job and forward it to the HMI.
+            await self.mcu_reads.put({
+                "type": "cm5_transport_event",
+                "event": "mcu_serial_connection_restored",
+                "device": self.device,
+            })
 
-            # 3) Wait until either task exits (disconnect/error/shutdown)
-            done, pending = await asyncio.wait(
-                {self.send_task, self.receive_task, self.heartbeat_task},
-                return_when=asyncio.FIRST_COMPLETED
+            self.logger.log.info(
+                "Published MCU serial connection-restored event: "
+                f"device={self.device}"
             )
 
-            # 4) Cancel the other tasks and cleanup
-            for t in pending:
-                t.cancel()
-            try:
-                await asyncio.gather(*pending, return_exceptions=True)
-            except Exception:
-                pass
+            await self.mcu_writes.put({
+                "action": "ping",
+            })
 
+            await self.mcu_writes.put({
+                "action": "get_firmware_features",
+            })
+
+            # 2) Spawn communication tasks.
+            self.send_task = asyncio.create_task(
+                self.send(),
+                name="mcu-serial-send",
+            )
+
+            self.receive_task = asyncio.create_task(
+                self.receive(),
+                name="mcu-serial-receive",
+            )
+
+            await asyncio.sleep(1.0)
+
+            if self._stopping:
+                # Shutdown might have been requested during the startup delay.
+                pending = {
+                    task
+                    for task in (
+                        self.send_task,
+                        self.receive_task,
+                    )
+                    if task is not None
+                    and not task.done()
+                }
+
+                for task in pending:
+                    task.cancel()
+
+                if pending:
+                    await asyncio.gather(
+                        *pending,
+                        return_exceptions=True,
+                    )
+
+                self.mcu_ready.clear()
+                self.close_serial()
+                break
+
+            self.heartbeat_task = asyncio.create_task(
+                self.heartbeat(period_s=1.5),
+                name="mcu-serial-heartbeat",
+            )
+
+            session_tasks = {
+                self.send_task,
+                self.receive_task,
+                self.heartbeat_task,
+            }
+
+            # 3) Wait for any communication task to exit.
+            done, pending = await asyncio.wait(
+                session_tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # Capture the reason before cancelling the remaining tasks.
+            loss_details = {
+                "type": "cm5_transport_event",
+                "event": "mcu_serial_connection_lost",
+                "device": self.device,
+            }
+
+            completed_task_names = []
+
+            for task in done:
+                completed_task_names.append(
+                    task.get_name()
+                )
+
+                if task.cancelled():
+                    continue
+
+                try:
+                    error = task.exception()
+                except asyncio.CancelledError:
+                    error = None
+
+                if error is not None:
+                    loss_details["reason"] = str(error)
+                    loss_details["failed_task"] = (
+                        task.get_name()
+                    )
+                    break
+
+            if completed_task_names:
+                loss_details["completed_tasks"] = (
+                    completed_task_names
+                )
+
+            # 4) Cancel tasks that belong to the failed connection.
+            for task in pending:
+                task.cancel()
+
+            if pending:
+                await asyncio.gather(
+                    *pending,
+                    return_exceptions=True,
+                )
+
+            # Retrieve results from completed tasks to avoid an unhandled
+            # task-exception warning if their implementation changes and
+            # allows an exception to propagate.
+            if done:
+                await asyncio.gather(
+                    *done,
+                    return_exceptions=True,
+                )
+
+            # Publish one loss boundary for this serial session. Do this
+            # before closing the handle and only for an unexpected exit.
+            if not self._stopping:
+                await self.mcu_reads.put(
+                    loss_details
+                )
+
+                self.logger.log.warning(
+                    "Published MCU serial connection-lost event: "
+                    f"device={self.device} "
+                    f"completed_tasks={completed_task_names} "
+                    f"reason={loss_details.get('reason')}"
+                )
+
+            self.mcu_ready.clear()
             self.close_serial()
 
-            # brief pause before trying again
+            # Clear references to tasks from the completed session.
+            self.send_task = None
+            self.receive_task = None
+            self.heartbeat_task = None
+
+            # Brief pause before reconnecting.
             if not self._stopping:
                 await asyncio.sleep(1.0)
 
-        self.logger.log.info("SerialServer.run exiting (stopping=True).")
+        self.logger.log.info(
+            "SerialServer.run exiting (stopping=True)."
+        )
 
     # --------------------------
     # Tasks
@@ -358,9 +507,18 @@ class SerialServer:
 
                     try:
                         msg_dict = json.loads(text)
-                        if msg_dict.get("type") not in ("encoder", "ultrasonic_dbg"):
+
+                        # Any valid JSON response proves that this H7
+                        # serial session is operational.
+                        self.mcu_ready.set()
+
+                        if msg_dict.get("type") not in (
+                            "encoder",
+                            "ultrasonic_dbg",
+                        ):
                             self.logger.log.info(
-                                f"MCU RX: {json.dumps(msg_dict, separators=(',', ':'))}"
+                                "MCU RX: "
+                                f"{json.dumps(msg_dict, separators=(',', ':'))}"
                             )
 
                     except json.JSONDecodeError as e:
@@ -446,7 +604,51 @@ class SerialServer:
                     elif msg_dict.get("type") == "encoder":
                         await self.mcu_reads.put(msg_dict)
 
+                    elif msg_dict.get("type") == "encoder_session":
+                        await self.mcu_reads.put(msg_dict)
+
                     elif msg_dict.get("type") in ("encoder_reset", "encoder_set"):
+                        await self.encoder_acks.put(msg_dict)
+                        await self.mcu_reads.put(msg_dict)
+
+                    elif msg_dict.get("type") == "process_status":
+                        self.logger.log.info(
+                            "Process status: "
+                            f"state={msg_dict.get('state')} "
+                            f"active={msg_dict.get('active')} "
+                            f"reason={msg_dict.get('reason')} "
+                            f"ts_ms={msg_dict.get('ts_ms')}"
+                        )
+
+                        await self.mcu_reads.put(msg_dict)
+
+                    # ------------------------------------------------------
+                    # SSv Glue Card / actuator telemetry
+                    # ------------------------------------------------------
+                    elif msg_dict.get("type") == "actuator_status":
+                        self.logger.log.info(
+                            "Actuator status: "
+                            f"commanded_mask={msg_dict.get('commanded_mask')} "
+                            f"feedback_mask={msg_dict.get('feedback_mask')} "
+                            f"jam_mask={msg_dict.get('jam_mask')} "
+                            f"pcb_fault={msg_dict.get('pcb_fault')} "
+                            f"ts_ms={msg_dict.get('ts_ms')}"
+                        )
+
+                        await self.mcu_reads.put(msg_dict)
+
+                    # ------------------------------------------------------
+                    # Temporary firmware diagnostics
+                    # ------------------------------------------------------
+                    elif msg_dict.get("type") in (
+                        "firmware_features",
+                        "main_loop_heartbeat",
+                        "loop_checkpoint",
+                    ):
+                        self.logger.log.info(
+                            f"MCU diagnostic: {msg_dict}"
+                        )
+
                         await self.mcu_reads.put(msg_dict)
 
                     else:
@@ -500,4 +702,5 @@ class SerialServer:
         except Exception:
             pass
 
+        self.mcu_ready.clear()
         self.close_serial()

@@ -1,17 +1,17 @@
 import asyncio
 import json
+import math
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
 import websockets.exceptions
 from websockets.server import serve
-from typing import Dict, Any, Optional, Tuple, Iterable, List
+
+from configuration_manager import ConfigurationManager
+from encoder_persistence import (EncoderPersistenceCoordinator, EncoderRecoveryState)
+from health import HealthModel
 from logger import Logger
 from queues import Queues
-from typing import Iterable
-from robot_list import (
-    load_robot_list, save_robot_list,
-    get_defaults, get_transitions,
-    thresholds_for_mcu, triggers_from_thresholds, mps_to_qpps, qpps_to_mps
-)
-from health import HealthModel
+
 
 WHEEL_DIAMETER_M = 0.048
 ENCODER_CPR = 4096
@@ -45,7 +45,7 @@ MODULES = [
 MODULE_BY_ID = {m["id"]: m for m in MODULES}
 
 class WebsocketServer():
-    def __init__(self, logger:Logger, queues:Queues):
+    def __init__(self, logger:Logger, queues:Queues, job_manager):
         self.logger = logger
         self.commands = queues.commands
         self.responses = queues.responses
@@ -57,125 +57,201 @@ class WebsocketServer():
         self.latest_health: Optional[dict] = None
         #self._active_connections = set[WebsocketServerProtocol] = set()
         self.trigger_acks = queues.trigger_acks
-    
+        self.encoder_acks = queues.encoder_acks
+        self.mcu_ready = queues.mcu_ready
+        self.job_manager = job_manager
+
+        if job_manager is None:
+            raise ValueError("job_manager is required")
+
+        self.config_manager = ConfigurationManager(
+            db=job_manager.db,
+            mcu_writes=self.mcu_writes,
+            trigger_sender=self.send_triggers_incrementally,
+            logger=self.logger,
+        )
+
+        self.latest_process_status: Optional[dict] = None
+        self.latest_actuator_status: Optional[dict] = None
+
+        self._last_actuator_fault_signature = (0, False)
+
+        self.encoder_persistence = EncoderPersistenceCoordinator(
+            db=job_manager.db,
+            mcu_writes=self.mcu_writes,
+            encoder_acks=self.encoder_acks,
+            logger=self.logger,
+            publish=self.responses.put,
+            checkpoint_period_s=2.0,
+            checkpoint_distance_mm=25.0,
+            restore_tolerance_mm=5.0,
+            transaction_timeout_s=8.0,
+        )
+
+        self.job_manager.set_encoder_context_provider(
+            self.encoder_persistence.event_context_snapshot
+        )
+
+
     async def run(self):
-        # Load robot.list.json once
+        await self.encoder_persistence.start_serial_runtime()
+        health_task = asyncio.create_task(self.health_pump())
+
         try:
-            self.robot_data = load_robot_list()
-            self.logger.log.info("robot.list.json loaded.")
-        except Exception as e:
-            self.logger.log.exception(f"Failed to load robot.list.json: {e}")
-            # Minimal fallback
-            self.robot_data = {
-                "version": 1,
-                "units": "encoder_counts",
-                "encoder_scale": 1.0,
-                "robots": [{"id": "robotA", "name": "Default", "channels": 4}],
-                "blade_types": [{"id": "bladeX", "name": "Default", "max_transitions": 4}],
-                "transitions": {"robotA": {"bladeX": [0, 1150, 2300, 3450]}},
-                "defaults": {"robot_id": "robotA", "blade_id": "bladeX"},
-                "motor_tuning": {
-                    "max_speed_qpps": 2500,
-                    "accel_qpps_s": 4250,
-                    "decel_qpps_s": 8500
-                }
-            }
+            try:
+                await self.encoder_persistence.startup_recovery(
+                    ready_timeout_s=20.0,
+                )
+            except asyncio.TimeoutError:
+                self.logger.log.error(
+                    "Encoder startup recovery timed out. "
+                )
+            except Exception:
+                self.logger.log.exception(
+                    "Encoder startup recovery failed."
+                )
 
-        # Apply defaults to MCU
-        try:
-            rid, bid = get_defaults(self.robot_data)
-            vals = get_transitions(self.robot_data, rid, bid)
-            thresholds = thresholds_for_mcu(self.robot_data, vals)
-            triggers = triggers_from_thresholds(
-                thresholds,
-                delay_s=9.0,
-                first_delay_s=0.0
+            try:
+                catalog = self.config_manager.catalog()
+                selection = catalog.get("selection", {})
+                rid = selection.get("robot_id")
+                bid = selection.get("blade_id")
+
+                if rid and bid:
+                    await self.config_manager.apply(rid, bid)
+                    self.logger.log.info(
+                        "Applied persisted configuration selection: "
+                        f"robot_id={rid}, blade_id={bid}"
+                    )
+                else:
+                    self.logger.log.warning(
+                        "No persisted robot/blade selection is available."
+                    )
+
+            except Exception:
+                self.logger.log.exception(
+                    "Failed to apply the persisted robot configuration."
+                )
+
+            async with serve(
+                self.connection_handler,
+                "0.0.0.0",
+                5000,
+            ):
+                await self.shutdown_event.wait()
+
+        finally:
+            health_task.cancel()
+            await asyncio.gather(
+                health_task,
+                return_exceptions=True,
             )
-            self.logger.log.info(f"WS: set_triggers (incremental) count={len(triggers)}")
-            channel_count = self.get_channel_count_for_robot(self.robot_data, rid)
-
-            # Incremental send to reduce MCU memory pressure
-            await self.send_triggers_incrementally(
-                triggers=triggers,
-                clear_first=True,
-                channel_count=channel_count,
-                default_delay_s=None,
-                wait_for_ack=True,
-                ack_timeout_s=1.5,
-            )
-            mt = self.robot_data.get("motor_tuning", {
-                "max_speed_qpps": 2500,
-                "accel_qpps_s": 4250,
-                "decel_qpps_s": 8500
-            })
-
-            # Backward compatibility for older robot.list.json files
-            mt.setdefault("max_speed_qpps", 2500)
-            mt.setdefault("accel_qpps_s", 4250)
-            mt.setdefault("decel_qpps_s", 8500)
-
-            # Convert accel/decel back to physical units for the ultrasonic PID slew limiter
-            accel_mps2 = qpps_to_mps(
-                int(mt["accel_qpps_s"]),
-                WHEEL_DIAMETER_M,
-                ENCODER_CPR
-            )
-
-            decel_mps2 = qpps_to_mps(
-                int(mt["decel_qpps_s"]),
-                WHEEL_DIAMETER_M,
-                ENCODER_CPR
-            )
-
-            await self.mcu_writes.put({
-                "action": "set_motor_tuning",
-
-                # Hardware/RoboClaw-style limits
-                "max_speed": int(mt["max_speed_qpps"]),
-                "accel": int(mt["accel_qpps_s"]),
-                "decel": int(mt["decel_qpps_s"]),
-
-                # Physical-unit limits used by Ultrasonic PID slew limiter
-                "accel_mps2": accel_mps2,
-                "decel_mps2": decel_mps2,
-            })
-
-            await self.apply_motor_direction_to_mcu()
-
-            self.logger.log.info(
-                f"WS: applied motor tuning "
-                f"max_speed_qpps={mt['max_speed_qpps']} "
-                f"accel_qpps_s={mt['accel_qpps_s']} "
-                f"decel_qpps_s={mt['decel_qpps_s']} "
-                f"accel_mps2={accel_mps2:.4f} "
-                f"decel_mps2={decel_mps2:.4f}"
-            )
-
-            await self.responses.put({
-                "type": "selection_applied",
-                "robot_id": rid, "blade_id": bid, "thresholds": thresholds
-            })
-        except Exception as e:
-            self.logger.log.exception(f"Failed to apply/default broadcast: {e}")
-
-        # Start the websocket server
-        async with serve(self.connection_handler, "0.0.0.0", 5000):
-            asyncio.create_task(self.health_pump())
-            await self.shutdown_event.wait()
 
     async def connection_handler(self, websocket):
-        # send a snapshot right away if we have one
-        if self.latest_health is not None:
-            try:
-                await websocket.send(json.dumps({'response': self.latest_health}))
-            except Exception:
-                pass
+        """
+        Handles one HMI WebSocket connection.
 
-        await asyncio.gather(
-            self.consumer(websocket),
-            self.response_producer(websocket),
+        The WebSocket server remains running after the tablet disconnects so
+        that the HMI can reconnect automatically.
+        """
+        self.connected = True
+
+        self.logger.log.info(
+            "HMI WebSocket client connected."
         )
-        self.shutdown_event.set()
+
+        try:
+            # Send the most recent health snapshot immediately.
+            if self.latest_health is not None:
+                await websocket.send(
+                    json.dumps({
+                        "response": self.latest_health,
+                    })
+                )
+
+            # Send the most recent process state immediately.
+            if self.latest_process_status is not None:
+                await websocket.send(
+                    json.dumps({
+                        "response": self.latest_process_status,
+                    })
+                )
+        
+            # Send the most recent actuator state immediately.
+            if self.latest_actuator_status is not None:
+                await websocket.send(
+                    json.dumps({
+                        "response": self.latest_actuator_status,
+                    })
+                )
+
+            await self.mcu_writes.put({"action": "get_actuator_status"})
+
+            consumer_task = asyncio.create_task(
+                self.consumer(websocket)
+            )
+
+            producer_task = asyncio.create_task(
+                self.response_producer(websocket)
+            )
+
+            # End this connection handler as soon as either the consumer
+            # or producer finishes.
+            done, pending = await asyncio.wait(
+                {
+                    consumer_task,
+                    producer_task,
+                },
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # Cancel the remaining task. This is especially important when
+            # response_producer is waiting on self.responses.get().
+            for task in pending:
+                task.cancel()
+
+            # Retrieve completed-task exceptions so asyncio does not report
+            # "Task exception was never retrieved".
+            for task in done:
+                try:
+                    task.result()
+                except asyncio.CancelledError:
+                    pass
+                except websockets.exceptions.ConnectionClosed:
+                    pass
+                except Exception:
+                    self.logger.log.exception(
+                        "WebSocket connection task failed."
+                    )
+
+            # Wait for cancelled tasks to finish cleaning up.
+            if pending:
+                await asyncio.gather(
+                    *pending,
+                    return_exceptions=True,
+                )
+
+        except websockets.exceptions.ConnectionClosed:
+            self.logger.log.info(
+                "HMI WebSocket connection closed."
+            )
+
+        except Exception:
+            self.logger.log.exception(
+                "Unexpected WebSocket connection-handler error."
+            )
+
+        finally:
+            self.connected = False
+
+            self.logger.log.info(
+                "HMI WebSocket client disconnected."
+            )
+
+            # Do not call self.shutdown_event.set() here.
+            #
+            # The server must remain running so the tablet can reconnect.
+
         
     async def health_pump(self):
         """
@@ -190,11 +266,274 @@ class WebsocketServer():
                     await self.responses.put(msg)
                     continue
 
-                if isinstance(msg, dict) and msg.get("type") == "encoder":
+                if isinstance(msg, dict) and msg.get("type") == "encoder_session":
+                    await self.encoder_persistence.handle_session_event(msg)
+
+                    state = str(msg.get("state", "")).lower()
+
+                    if state == "power_lost":
+                        self.job_manager.log_event(
+                            "motor_controller_power_lost",
+                            msg,
+                        )
+                    elif state == "waiting_for_restore":
+                        self.job_manager.log_event(
+                            "motor_controller_power_restored",
+                            msg,
+                        )
+
                     await self.responses.put(msg)
                     continue
 
-                if isinstance(msg, dict) and msg.get("type") in ("encoder_reset", "encoder_set"):
+                if isinstance(msg, dict) and msg.get("type") == "encoder":
+                    accepted = await self.encoder_persistence.observe(msg)
+                    if accepted is not None:
+                        await self.responses.put(accepted)
+                    # Invalid samples are intentionally not forwarded. The recovery
+                    # message preserves the last valid display value in Flutter.
+                    continue
+
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("type")
+                    == "process_status"
+                ):
+                    self.latest_process_status = dict(msg)
+
+                    if msg.get("active") is False:
+                        # Save the newest encoder telemetry at a process
+                        # stop or fault boundary.
+                        await self.encoder_persistence.flush()
+
+                    self.logger.log.info(
+                        "Forwarding process status "
+                        "to HMI: "
+                        f"state={msg.get('state')} "
+                        f"active={msg.get('active')} "
+                        f"reason={msg.get('reason')}"
+                    )
+
+                    if self.job_manager is not None:
+                        try:
+                            active_job = (
+                                self.job_manager
+                                .get_active_job()
+                            )
+
+                            if active_job is not None:
+                                self.job_manager.log_event(
+                                    "process_status",
+                                    msg,
+                                )
+
+                                is_active = (
+                                    msg.get("active") is True
+                                )
+
+                                process_state = str(
+                                    msg.get(
+                                        "state",
+                                        "",
+                                    )
+                                ).strip().lower()
+
+                                process_is_running = (
+                                    is_active
+                                    or process_state
+                                    in {
+                                        "running",
+                                        "active",
+                                        "started",
+                                    }
+                                )
+
+                                if (
+                                    process_is_running
+                                    and active_job.get("state")
+                                    != "RUNNING"
+                                ):
+                                    updated_job = (
+                                        self.job_manager
+                                        .mark_running()
+                                    )
+
+                                    if updated_job is not None:
+                                        self.logger.log.info(
+                                            "Job marked RUNNING "
+                                            "from MCU process status: "
+                                            f"job_uuid="
+                                            f"{updated_job['job_uuid']}"
+                                        )
+
+                        except Exception:
+                            self.logger.log.exception(
+                                "Failed to persist "
+                                "process status."
+                            )
+
+                    await self.responses.put(msg)
+                    continue
+
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("type") == "cm5_transport_event"
+                ):
+                    event_type = str(
+                        msg.get(
+                            "event",
+                            "transport_event",
+                        )
+                    )
+
+                    if self.job_manager is not None:
+                        try:
+                            self.job_manager.log_event(
+                                event_type,
+                                msg,
+                            )
+                        except Exception:
+                            self.logger.log.exception(
+                                "Failed to persist MCU serial "
+                                f"transport event: {event_type}"
+                            )
+
+                    await self.responses.put(msg)
+                    continue
+
+                # SSv Glue Card status and temporary firmware diagnostics
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("type")
+                    == "actuator_status"
+                ):
+                    self.latest_actuator_status = (
+                        dict(msg)
+                    )
+
+                    self.logger.log.info(
+                        "Forwarding actuator status "
+                        "to HMI: "
+                        f"commanded_mask="
+                        f"{msg.get('commanded_mask')} "
+                        f"feedback_mask="
+                        f"{msg.get('feedback_mask')} "
+                        f"jam_mask="
+                        f"{msg.get('jam_mask')} "
+                        f"pcb_fault="
+                        f"{msg.get('pcb_fault')} "
+                        f"ts_ms="
+                        f"{msg.get('ts_ms')}"
+                    )
+
+                    if self.job_manager:
+                        try:
+                            jam_mask = int(
+                                msg.get(
+                                    "jam_mask",
+                                    0,
+                                )
+                            )
+
+                            pcb_fault = (
+                                msg.get("pcb_fault")
+                                is True
+                            )
+
+                            signature = (
+                                jam_mask,
+                                pcb_fault,
+                            )
+
+                            if (
+                                signature
+                                != self._last_actuator_fault_signature
+                            ):
+                                previous = (
+                                    self._last_actuator_fault_signature
+                                )
+
+                                # Update the edge state even if no job is active. This prevents
+                                # repeated logging if a job becomes active while the same fault
+                                # remains asserted.
+                                self._last_actuator_fault_signature = signature
+
+                                if (
+                                    self.job_manager is not None
+                                    and (
+                                        jam_mask != 0
+                                        or pcb_fault
+                                    )
+                                ):
+                                    self.job_manager.log_event(
+                                        "actuator_fault_activated",
+                                        {
+                                            **msg,
+                                            "previous_jam_mask": (
+                                                previous[0]
+                                            ),
+                                            "previous_pcb_fault": (
+                                                previous[1]
+                                            ),
+                                        },
+                                    )
+
+                                elif (
+                                    self.job_manager is not None
+                                    and (
+                                        previous[0] != 0
+                                        or previous[1]
+                                    )
+                                ):
+                                    self.job_manager.log_event(
+                                        "actuator_fault_cleared",
+                                        {
+                                            **msg,
+                                            "previous_jam_mask": (
+                                                previous[0]
+                                            ),
+                                            "previous_pcb_fault": (
+                                                previous[1]
+                                            ),
+                                        },
+                                    )
+
+                        except (
+                            TypeError,
+                            ValueError,
+                        ):
+                            self.logger.log.warning(
+                                "Received invalid actuator fault status: "
+                                f"jam_mask={msg.get('jam_mask')!r} "
+                                f"pcb_fault={msg.get('pcb_fault')!r}"
+                            )
+
+                        except Exception:
+                            self.logger.log.exception(
+                                "Failed to persist actuator fault transition."
+                            )
+
+                    await self.responses.put(msg)
+                    continue
+
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("type")
+                    in (
+                        "firmware_features",
+                        "main_loop_heartbeat",
+                        "loop_checkpoint",
+                    )
+                ):
+                    await self.responses.put(msg)
+                    continue
+
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("type") in (
+                        "encoder_reset",
+                        "encoder_set",
+                    )
+                ):
                     await self.responses.put(msg)
                     continue
 
@@ -214,12 +553,31 @@ class WebsocketServer():
                     await self.responses.put(synth)
                     self.logger.log.info(f"[HEALTH/SYNTH] from boot_health state={state}")
                     # Don't 'continue'—also let HealthModel see it below
+
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("type") in (
+                        "encoder",
+                        "actuator_status",
+                        "main_loop_heartbeat",
+                        "loop_checkpoint",
+                        "firmware_features",
+                    )
+                ):
+                    await self.responses.put(msg)
+                    continue
                     
                 if isinstance(msg, dict) and msg.get("type") == "fw_version":
+
+                    if self.job_manager:
+                        self.job_manager.update_identity(msg)
+
                     new_snap = self.health.update_from_mcu(msg)
+
                     if new_snap:
                         self.latest_health = new_snap
                         await self.responses.put(new_snap)
+
                     continue
 
                 # 3) Optional: map andon_diag to a minimal health (keeps UI lively)
@@ -272,71 +630,791 @@ class WebsocketServer():
 #==============================================================
 # message receiver
 #==============================================================
+
+    async def send_response(
+        self,
+        websocket,
+        payload: Dict[str, Any],
+        *,
+        request_id: Any = None,
+    ) -> None:
+        """
+        Send a response directly to the HMI that made the request.
+
+        Request responses should not use the shared responses queue.
+        A shared queue could deliver a response to the wrong HMI if
+        multiple HMI clients are connected.
+        """
+        response = dict(payload)
+
+        if request_id is not None:
+            response["req_id"] = request_id
+
+        await websocket.send(
+            json.dumps(
+                {
+                    "response": response,
+                },
+                separators=(",", ":"),
+                default=str,
+            )
+        )
+
+    async def send_error(
+        self,
+        websocket,
+        *,
+        error: str,
+        message: str,
+        request_id: Any = None,
+        details: Any = None,
+    ) -> None:
+        """
+        Send a structured error directly to the requesting HMI.
+        """
+        payload = {
+            "type": "error",
+            "ok": False,
+            "error": error,
+            "message": message,
+        }
+
+        if details is not None:
+            payload["details"] = details
+
+        await self.send_response(
+            websocket,
+            payload,
+            request_id=request_id,
+        )
+
 # receive the messages / commands from the tablet
     async def consumer(self, websocket):
+        """
+        Receives commands from the HMI.
+        """
         try:
             async for message in websocket:
-                self.connected = True
-                await self.consumer_handler(message)
-        except websockets.exceptions.ConnectionClosedError:
-            self.connected = False
+                await self.consumer_handler(websocket, message)
+
+        except websockets.exceptions.ConnectionClosedOK:
+            self.logger.log.info(
+                "HMI WebSocket consumer closed normally."
+            )
+
+        except websockets.exceptions.ConnectionClosedError as error:
+            self.logger.log.warning(
+                f"HMI WebSocket consumer lost connection: {error}"
+            )
+
+        except websockets.exceptions.ConnectionClosed:
+            self.logger.log.info(
+                "HMI WebSocket consumer connection closed."
+            )
+
+        except Exception:
+            self.logger.log.exception(
+                "Unexpected WebSocket consumer error."
+            )
 
 
-    async def consumer_handler(self, packet):
-        self.logger.log.info(packet)
-        cmd = json.loads(packet)
+    async def consumer_handler(self, websocket, packet):
+        """
+        Handle one command received from an HMI WebSocket connection.
+
+        Request-specific responses that include a req_id are sent directly
+        to the requesting WebSocket. Asynchronous MCU events and broadcasts
+        continue to use the shared responses queue.
+        """
+        try:
+            cmd = json.loads(packet)
+        except (TypeError, json.JSONDecodeError) as error:
+            self.logger.log.warning(
+                "Received invalid JSON from HMI: %s",
+                error,
+            )
+
+            await self.send_error(
+                websocket,
+                error="invalid_json",
+                message="The request is not valid JSON.",
+                details=str(error),
+            )
+            return
+
+        if not isinstance(cmd, dict):
+            self.logger.log.warning(
+                "Received invalid HMI request type: %s",
+                type(cmd).__name__,
+            )
+
+            await self.send_error(
+                websocket,
+                error="invalid_request",
+                message="The request must be a JSON object.",
+            )
+            return
+
+        # cmd has now been parsed and confirmed to be a dictionary.
+        self.logger.log.info(
+            "HMI request: "
+            f"type={cmd.get('type')} "
+            f"action={cmd.get('action')} "
+            f"req_id={cmd.get('req_id')} "
+            f"actor_initials={cmd.get('actor_initials')}"
+        )
 
         t = cmd.get("type")
         action = cmd.get("action")
 
-        # ----------------------------------------------------------
-        # HMI WebSocket heartbeat
-        # ----------------------------------------------------------
-        if t == "ping":
-            await self.responses.put({
-                "type": "pong",
-                "ts": cmd.get("ts"),
-            })
+        # ==========================================================
+        # Request-specific robot configuration APIs
+        # ==========================================================
+
+        if t == "get_robot_configuration":
+            request_id = cmd.get("req_id")
+
+            try:
+                catalog = self.config_manager.catalog()
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "robot_configuration",
+                        "ok": True,
+                        **catalog,
+                    },
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to load robot configuration."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error="configuration_read_failed",
+                    message="Configuration could not be loaded.",
+                    request_id=request_id,
+                    details=str(error),
+                )
+
             return
-        
+
+        if t == "delete_blade_type":
+            request_id = cmd.get("req_id")
+
+            try:
+                actor = (
+                    self.validate_actor_initials(
+                        cmd
+                    )
+                )
+
+                self.config_manager.delete_blade_type(
+                    str(cmd["blade_id"]),
+                    actor,
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            "blade_type_deleted",
+                        "ok": True,
+                        "blade_id":
+                            str(
+                                cmd["blade_id"]
+                            ),
+                    },
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to delete blade type."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "delete_blade_type_failed"
+                    ),
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            return
+
+        if t == "apply_transition_profile":
+            request_id = cmd.get("req_id")
+
+            try:
+                robot_id = str(
+                    cmd.get("robot_id", "")
+                ).strip()
+
+                blade_id = str(
+                    cmd.get("blade_id", "")
+                ).strip()
+
+                result = await self.config_manager.apply(
+                    robot_id,
+                    blade_id,
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "transition_profile_applied",
+                        "ok": True,
+                        "profile": result,
+                    },
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to apply transition profile."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error="apply_transition_profile_failed",
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            return
+
+        if t == "save_transition_override":
+            request_id = cmd.get("req_id")
+
+            try:
+                robot_id = str(
+                    cmd.get("robot_id", "")
+                ).strip()
+
+                blade_id = str(
+                    cmd.get("blade_id", "")
+                ).strip()
+
+                values = list(
+                    cmd.get("values") or []
+                )
+
+                # Replace this with the authenticated username once
+                # CM5-side authentication exists.
+                actor = (
+                    self.validate_actor_initials(
+                        cmd
+                    )
+                )
+
+                result = (
+                    await self.config_manager
+                    .save_override_and_apply(
+                        robot_id,
+                        blade_id,
+                        values,
+                        actor,
+                    )
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "transition_override_saved",
+                        "ok": True,
+                        "profile": result,
+                    },
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to save transition override."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error="save_transition_override_failed",
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            return
+
+        if t == "create_blade_type":
+            request_id = cmd.get("req_id")
+
+            try:
+                actor = (
+                    self.validate_actor_initials(
+                        cmd
+                    )
+                )
+
+                blade = (
+                    self.config_manager
+                    .create_blade_type(
+                        blade_id=str(
+                            cmd["blade_id"]
+                        ),
+                        name=str(
+                            cmd["name"]
+                        ),
+                        max_transitions=int(
+                            cmd[
+                                "max_transitions"
+                            ]
+                        ),
+                        copy_from_blade_id=str(
+                            cmd.get(
+                                "copy_from_blade_id",
+                                "",
+                            )
+                        ),
+                        actor=actor,
+                    )
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            "blade_type_created",
+                        "ok": True,
+                        "blade": blade,
+                    },
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to create blade type."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "create_blade_type_failed"
+                    ),
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            return
+
+        if t == "update_blade_type":
+            request_id = cmd.get("req_id")
+
+            try:
+                actor = (
+                    self.validate_actor_initials(
+                        cmd
+                    )
+                )
+
+                blade = (
+                    self.config_manager
+                    .update_blade_type(
+                        blade_id=str(
+                            cmd["blade_id"]
+                        ),
+                        name=str(
+                            cmd["name"]
+                        ),
+                        max_transitions=int(
+                            cmd[
+                                "max_transitions"
+                            ]
+                        ),
+                        actor=actor,
+                    )
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            "blade_type_updated",
+                        "ok": True,
+                        "blade": blade,
+                    },
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to update blade type."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "update_blade_type_failed"
+                    ),
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            return
+
+        if t == "archive_blade_type":
+            request_id = cmd.get("req_id")
+
+            try:
+                actor = (
+                    self.validate_actor_initials(
+                        cmd
+                    )
+                )
+
+                self.config_manager.archive_blade_type(
+                    str(cmd["blade_id"]),
+                    actor,
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            "blade_type_archived",
+                        "ok": True,
+                    },
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to archive blade type."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "archive_blade_type_failed"
+                    ),
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            return
+
+        if t == "restore_blade_type":
+            request_id = cmd.get("req_id")
+
+            try:
+                actor = (
+                    self.validate_actor_initials(
+                        cmd
+                    )
+                )
+
+                self.config_manager.restore_blade_type(
+                    str(cmd["blade_id"]),
+                    actor,
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            "blade_type_restored",
+                        "ok": True,
+                    },
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to restore blade type."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "restore_blade_type_failed"
+                    ),
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            return
+
+        if t == "get_job_metrics":
+            request_id = cmd.get(
+                "req_id"
+            )
+
+            try:
+                if self.job_manager is None:
+                    raise RuntimeError(
+                        "Job manager is unavailable."
+                    )
+
+                metrics = (
+                    self.job_manager
+                    .db
+                    .get_job_history_metrics()
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "job_metrics",
+                        "ok": True,
+                        **metrics,
+                    },
+                    request_id=request_id,
+                )
+
+                self.logger.log.info(
+                    "Job metrics sent to HMI: "
+                    f"req_id={request_id}"
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to retrieve job metrics."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "get_job_metrics_failed"
+                    ),
+                    message=(
+                        "Job metrics could not "
+                        "be retrieved."
+                    ),
+                    request_id=request_id,
+                    details=str(error),
+                )
+
+            return
+
+        if t == "get_job_details":
+            request_id = cmd.get(
+                "req_id"
+            )
+
+            try:
+                if self.job_manager is None:
+                    raise RuntimeError(
+                        "Job manager is unavailable."
+                    )
+
+                job_uuid = str(
+                    cmd.get(
+                        "job_uuid",
+                        "",
+                    )
+                ).strip()
+
+                if not job_uuid:
+                    raise ValueError(
+                        "job_uuid is required."
+                    )
+
+                job = (
+                    self.job_manager
+                    .db
+                    .get_job_by_uuid(
+                        job_uuid
+                    )
+                )
+
+                if job is None:
+                    raise ValueError(
+                        "Job not found."
+                    )
+
+                events = (
+                    self.job_manager
+                    .db
+                    .get_job_events(
+                        job_uuid
+                    )
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "job_details",
+                        "ok": True,
+                        "job": job,
+                        "events": events,
+                    },
+                    request_id=request_id,
+                )
+
+                self.logger.log.info(
+                    "Job details sent to HMI: "
+                    f"job_uuid={job_uuid} "
+                    f"events={len(events)} "
+                    f"req_id={request_id}"
+                )
+
+            except ValueError as error:
+                self.logger.log.warning(
+                    "Job details request rejected: "
+                    f"{error}"
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "get_job_details_rejected"
+                    ),
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to retrieve job details."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "get_job_details_failed"
+                    ),
+                    message=(
+                        "Job details could not "
+                        "be retrieved."
+                    ),
+                    request_id=request_id,
+                    details=str(error),
+                )
+
+            return
+
+        if t == "revert_transition_override":
+            request_id = cmd.get("req_id")
+
+            try:
+                robot_id = str(
+                    cmd.get("robot_id", "")
+                ).strip()
+
+                blade_id = str(
+                    cmd.get("blade_id", "")
+                ).strip()
+
+                actor = (
+                    self.validate_actor_initials(
+                        cmd
+                    )
+                )
+
+                result = (
+                    await self.config_manager
+                    .revert_and_apply(
+                        robot_id,
+                        blade_id,
+                        actor,
+                    )
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "transition_override_reverted",
+                        "ok": True,
+                        "profile": result,
+                    },
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to revert transition override."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error="revert_transition_override_failed",
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            return
+
+        # ==========================================================
+        # HMI WebSocket heartbeat
+        # ==========================================================
+
+        if t == "ping":
+            await websocket.send(
+                json.dumps({
+                    "response": {
+                        "type": "pong",
+                        "ts": cmd.get("ts"),
+                    }
+                })
+            )
+            return
+
+        # ==========================================================
+        # Encoder commands
+        # ==========================================================
+
         if t == "reset_encoder":
-            await self.mcu_writes.put({
-                "action": "reset_encoder"
-            })
+            request_id = cmd.get("req_id")
+            try:
+                result = await self.encoder_persistence.operator_reset()
+                await self.send_response(
+                    websocket,
+                    {**result, "type": "encoder_reset"},
+                    request_id=request_id,
+                )
+            except Exception as error:
+                await self.send_error(
+                    websocket,
+                    error="encoder_reset_failed",
+                    message=str(error),
+                    request_id=request_id,
+                )
             return
 
         if t == "set_encoder":
+            request_id = cmd.get("req_id")
             try:
-                radius_m = float(cmd.get("radius_m", 0.0))
-            except Exception:
-                await self.responses.put({
-                    "type": "error",
-                    "error": "bad_encoder_value",
-                    "details": f"radius_m={cmd.get('radius_m')}"
-                })
-                return
-
-            if radius_m < 0:
-                await self.responses.put({
-                    "type": "error",
-                    "error": "bad_encoder_value",
-                    "details": "radius_m must be >= 0"
-                })
-                return
-
-            await self.mcu_writes.put({
-                "action": "set_encoder",
-                "radius_m": radius_m
-            })
+                radius_m = float(cmd["radius_m"])
+                if not math.isfinite(radius_m):
+                    raise ValueError("radius_m must be finite.")
+                result = await self.encoder_persistence.operator_set(
+                    radius_m * 1000.0
+                )
+                await self.send_response(
+                    websocket,
+                    {**result, "type": "encoder_set"},
+                    request_id=request_id,
+                )
+            except Exception as error:
+                await self.send_error(
+                    websocket,
+                    error="encoder_set_failed",
+                    message=str(error),
+                    request_id=request_id,
+                )
             return
 
-        # ----------------------------------------------------------
+        # ==========================================================
         # Direct MCU passthrough commands from HMI
-        # ----------------------------------------------------------
+        # ==========================================================
 
         if action == "jog":
             direction = cmd.get("dir")
-            if direction not in ("forward", "backward"):
+
+            if direction not in (
+                "forward",
+                "backward",
+            ):
                 await self.responses.put({
                     "type": "error",
                     "id": "jog",
@@ -346,22 +1424,50 @@ class WebsocketServer():
                 return
 
             try:
-                speed = float(cmd.get("speed", 0.02))
-            except Exception:
+                speed = float(
+                    cmd.get(
+                        "speed",
+                        0.02,
+                    )
+                )
+            except (TypeError, ValueError):
                 speed = 0.02
 
             try:
-                lease_ms = int(cmd.get("lease_ms", 250))
-            except Exception:
+                lease_ms = int(
+                    cmd.get(
+                        "lease_ms",
+                        250,
+                    )
+                )
+            except (TypeError, ValueError):
                 lease_ms = 250
 
             try:
-                seq = int(cmd.get("seq", 0))
-            except Exception:
+                seq = int(
+                    cmd.get(
+                        "seq",
+                        0,
+                    )
+                )
+            except (TypeError, ValueError):
                 seq = 0
 
-            speed = max(0.0, min(speed, 0.02))
-            lease_ms = max(1, min(lease_ms, 500))
+            speed = max(
+                0.0,
+                min(
+                    speed,
+                    0.02,
+                ),
+            )
+
+            lease_ms = max(
+                1,
+                min(
+                    lease_ms,
+                    500,
+                ),
+            )
 
             await self.mcu_writes.put({
                 "action": "jog",
@@ -374,8 +1480,13 @@ class WebsocketServer():
 
         if action == "jog_stop":
             try:
-                seq = int(cmd.get("seq", 0))
-            except Exception:
+                seq = int(
+                    cmd.get(
+                        "seq",
+                        0,
+                    )
+                )
+            except (TypeError, ValueError):
                 seq = 0
 
             await self.mcu_writes.put({
@@ -384,73 +1495,496 @@ class WebsocketServer():
             })
             return
 
+        # ==========================================================
+        # Process commands
+        # ==========================================================
 
-        if t == "get_robot_list":
-            # Send current list to HMI
-            mt = self.robot_data.get("motor_tuning", {
-                "max_speed_qpps": 2500,
-                "accel_qpps_s": 4250,
-                "decel_qpps_s": 8500
-            })
+        if t == "start_process":
+            if (
+                self.encoder_persistence.state
+                != EncoderRecoveryState.VALID
+            ):
+                await self.send_error(
+                    websocket,
+                    error="encoder_not_valid",
+                    message=(
+                        "Encoder recovery must complete "
+                        "before the process can start."
+                    ),
+                    request_id=cmd.get("req_id"),
+                )
+                return
 
-            await self.responses.put({
-                "type": "robot_list",
-                "robots": self.robot_data["robots"],
-                "blade_types": self.robot_data["blade_types"],
-                "transitions": self.robot_data["transitions"],
-                "defaults": self.robot_data.get("defaults", {}),
-                "motor_tuning": {
-                    "max_speed_mps": qpps_to_mps(
-                        mt["max_speed_qpps"], WHEEL_DIAMETER_M, ENCODER_CPR
-                    ),
-                    "accel_mps2": qpps_to_mps(
-                        mt["accel_qpps_s"], WHEEL_DIAMETER_M, ENCODER_CPR
-                    ),
-                    "decel_mps2": qpps_to_mps(
-                        mt["decel_qpps_s"], WHEEL_DIAMETER_M, ENCODER_CPR
-                    ),
-                },
-                "motor_direction": self.get_motor_direction(),
+            await self.mcu_writes.put({
+                "action": "start_process",
             })
             return
 
-        elif t == "set_motor_direction":
+        if t == "stop_process":
+            await self.mcu_writes.put({
+                "action": "stop_process",
+            })
+            return
+
+        if t == "get_process_status":
+            await self.mcu_writes.put({
+                "action": "get_process_status",
+            })
+            return
+
+        # ==========================================================
+        # Job commands
+        # ==========================================================
+
+        if t == "start_job":
+            request_id = cmd.get("req_id")
+
             try:
-                directions = cmd.get("directions")
-                if not isinstance(directions, dict):
-                    raise ValueError("directions must be an object")
+                if self.job_manager is None:
+                    raise RuntimeError(
+                        "Job manager is unavailable."
+                    )
 
-                clean = {}
-                for key in ("motor_1", "motor_2", "motor_3", "motor_4"):
-                    val = directions.get(key)
-                    if val not in (-1, 1):
-                        val = int(val)
-                    clean[key] = -1 if val < 0 else 1
+                operator_initials = str(
+                    cmd.get(
+                        "operator_initials",
+                        "",
+                    )
+                ).strip()
 
-                self.robot_data["motor_direction"] = clean
-                save_robot_list(self.robot_data)
+                blade_serial = str(
+                    cmd.get(
+                        "blade_serial",
+                        "",
+                    )
+                ).strip()
 
-                await self.apply_motor_direction_to_mcu()
+                blade_type_id = str(
+                    cmd.get(
+                        "blade_type_id",
+                        "",
+                    )
+                ).strip()
 
-                await self.responses.put({
-                    "type": "ack",
-                    "ok": True,
-                    "info": "motor_direction_saved",
-                    "motor_direction": clean,
-                })
+                blade_type_name = str(
+                    cmd.get(
+                        "blade_type_name",
+                        blade_type_id,
+                    )
+                ).strip()
 
-            except Exception as e:
-                await self.responses.put({
-                    "type": "error",
-                    "error": "motor_direction_failed",
-                    "details": str(e),
-                })
+                catalog = self.config_manager.catalog()
+
+                selection = catalog.get(
+                    "selection",
+                    {},
+                )
+
+                default_robot_id = selection.get(
+                    "robot_id"
+                )
+
+                if not default_robot_id:
+                    raise ValueError(
+                        "No robot type is selected."
+                    )
+
+                if not blade_type_id:
+                    raise ValueError(
+                        "blade_type_id is required."
+                    )
+
+                configuration_snapshot = (
+                    self.config_manager.job_snapshot(
+                        default_robot_id,
+                        blade_type_id,
+                    )
+                )
+
+                initialization = (
+                    await self.encoder_persistence.create_job_at_zero(
+                        create_job=lambda: self.job_manager.start_job(
+                            operator_initials=operator_initials,
+                            blade_serial=blade_serial,
+                            blade_type_id=blade_type_id,
+                            blade_type_name=blade_type_name,
+                            configuration_snapshot=configuration_snapshot,
+                        )
+                    )
+                )
+
+                job = initialization["job"]
+                encoder_initialization = initialization["encoder"]
+
+                self.logger.log.info(
+                    "Job created with encoder zero origin: "
+                    f"job_uuid={job['job_uuid']} "
+                    f"operator={job['operator_initials']} "
+                    f"blade_serial={job['blade_serial']} "
+                    f"blade_type={job['blade_type_id']} "
+                    f"origin_mm="
+                    f"{encoder_initialization['rear_distance_mm']} "
+                    f"encoder_session_id="
+                    f"{encoder_initialization['encoder_session_id']} "
+                    f"transaction_id="
+                    f"{encoder_initialization['transaction_id']}"
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "job_started",
+                        "ok": True,
+                        "job": job,
+                        "encoder_initialization": {
+                            "ok": True,
+                            "origin_mm": (
+                                encoder_initialization[
+                                    "rear_distance_mm"
+                                ]
+                            ),
+                            "radius_m": (
+                                encoder_initialization[
+                                    "radius_m"
+                                ]
+                            ),
+                            "counts": (
+                                encoder_initialization[
+                                    "counts"
+                                ]
+                            ),
+                            "encoder_session_id": (
+                                encoder_initialization[
+                                    "encoder_session_id"
+                                ]
+                            ),
+                            "transaction_id": (
+                                encoder_initialization[
+                                    "transaction_id"
+                                ]
+                            ),
+                        },
+                    },
+                    request_id=request_id,
+                )
+
+            except ValueError as error:
+                self.logger.log.warning(
+                    f"Start job rejected: {error}"
+                )
+
+                await self.send_error(
+                    websocket,
+                    error="start_job_rejected",
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to create job with encoder zero origin."
+                )
+
+                # create_job_at_zero() marks a partially created job as
+                # terminal when encoder initialization fails. Refresh the
+                # in-memory cache so it does not retain that terminal job.
+                try:
+                    self.job_manager.current_job = (
+                        self.job_manager.db.get_active_job()
+                    )
+                except Exception:
+                    self.logger.log.exception(
+                        "Failed to refresh the active-job cache after "
+                        "encoder initialization failure."
+                    )
+
+                await self.send_error(
+                    websocket,
+                    error="start_job_initialization_failed",
+                    message=(
+                        "The job could not be started because its encoder origin "
+                        "could not be initialized."
+                    ),
+                    request_id=request_id,
+                    details=str(error),
+                )
 
             return
-        
-        elif t == "get_health":
+
+        if t in (
+            "get_job",
+            "get_active_job",
+        ):
+            request_id = cmd.get("req_id")
+
+            try:
+                if self.job_manager is None:
+                    raise RuntimeError(
+                        "Job manager is unavailable."
+                    )
+
+                job = self.job_manager.get_active_job()
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "active_job",
+                        "ok": True,
+                        "job": job,
+                    },
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to retrieve active job."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error="get_active_job_failed",
+                    message="The active job could not be retrieved.",
+                    request_id=request_id,
+                    details=str(error),
+                )
+
+            return
+
+        if t == "end_job":
+            request_id = cmd.get("req_id")
+
+            try:
+                if self.job_manager is None:
+                    raise RuntimeError(
+                        "Job manager is unavailable."
+                    )
+
+                job_uuid = str(
+                    cmd.get(
+                        "job_uuid",
+                        "",
+                    )
+                ).strip()
+
+                result = str(
+                    cmd.get(
+                        "result",
+                        "PASS",
+                    )
+                ).strip()
+
+                if not job_uuid:
+                    raise ValueError(
+                        "job_uuid is required."
+                    )
+
+                await self.encoder_persistence.flush()
+
+                completed_job = (
+                    self.job_manager.end_job(
+                        job_uuid=job_uuid,
+                        result=result,
+                    )
+                )
+
+                self.logger.log.info(
+                    "Job completed: "
+                    f"job_uuid={job_uuid} "
+                    f"result={result}"
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "job_completed",
+                        "ok": True,
+                        "job": completed_job,
+                    },
+                    request_id=request_id,
+                )
+
+            except ValueError as error:
+                self.logger.log.warning(
+                    f"End job rejected: {error}"
+                )
+
+                await self.send_error(
+                    websocket,
+                    error="end_job_rejected",
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to complete job."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error="end_job_failed",
+                    message=(
+                        "The job could not be completed."
+                    ),
+                    request_id=request_id,
+                    details=str(error),
+                )
+
+            return
+
+        if t == "get_job_history":
+            request_id = cmd.get(
+                "req_id"
+            )
+
+            try:
+                if self.job_manager is None:
+                    raise RuntimeError(
+                        "Job manager is unavailable."
+                    )
+
+                limit = int(
+                    cmd.get(
+                        "limit",
+                        50,
+                    )
+                )
+
+                offset = int(
+                    cmd.get(
+                        "offset",
+                        0,
+                    )
+                )
+
+                search = str(
+                    cmd.get(
+                        "search",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                result_filter = str(
+                    cmd.get(
+                        "result",
+                        "all",
+                    )
+                    or "all"
+                ).strip().lower()
+
+                from_utc = cmd.get(
+                    "from_utc"
+                )
+
+                to_utc = cmd.get(
+                    "to_utc"
+                )
+
+                result = (
+                    self.job_manager
+                    .db
+                    .list_job_history(
+                        limit=limit,
+                        offset=offset,
+                        search=search,
+                        result_filter=(
+                            result_filter
+                        ),
+                        from_utc=from_utc,
+                        to_utc=to_utc,
+                    )
+                )
+
+                self.logger.log.info(
+                    "Job history query: "
+                    f"search={search!r} "
+                    f"result={result_filter!r} "
+                    f"from_utc={from_utc!r} "
+                    f"to_utc={to_utc!r} "
+                    f"offset={offset} "
+                    f"returned="
+                    f"{len(result['jobs'])} "
+                    f"total={result['total']}"
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "job_history",
+                        "ok": True,
+                        **result,
+                    },
+                    request_id=request_id,
+                )
+
+            except (
+                TypeError,
+                ValueError,
+            ) as error:
+                self.logger.log.warning(
+                    "Job history request "
+                    f"rejected: {error}"
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "get_job_history_rejected"
+                    ),
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to retrieve "
+                    "job history."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "get_job_history_failed"
+                    ),
+                    message=(
+                        "Job history could not "
+                        "be retrieved."
+                    ),
+                    request_id=request_id,
+                    details=str(error),
+                )
+
+            return
+
+
+        # ==========================================================
+        # Actuator status
+        # ==========================================================
+
+        if t == "get_actuator_status":
+            if self.latest_actuator_status is not None:
+                await websocket.send(
+                    json.dumps({
+                        "response": (
+                            self.latest_actuator_status
+                        ),
+                    })
+                )
+
+            await self.mcu_writes.put({
+                "action": "get_actuator_status",
+            })
+            return
+
+        # ==========================================================
+        # Health and firmware
+        # ==========================================================
+
+        if t == "get_health":
             await self.responses.put(
-                self.latest_health or {
+                self.latest_health
+                or {
                     "type": "health",
                     "state": "unknown",
                     "sources": [],
@@ -462,248 +1996,195 @@ class WebsocketServer():
             )
             return
 
-        elif t == "get_firmware":
+        if t == "get_firmware":
             await self.mcu_writes.put({
-                "action": "get_firmware"
+                "action": "get_firmware",
             })
 
             await self.responses.put({
                 "type": "ack",
                 "ok": True,
-                "info": "firmware_refresh_requested"
+                "info": "firmware_refresh_requested",
             })
             return
 
-        elif t == "apply_selection":
-            rid = cmd.get("robot_id")
-            bid = cmd.get("blade_id")
-            try:
-                vals = get_transitions(self.robot_data, rid, bid)
-                thresholds = thresholds_for_mcu(self.robot_data, vals)
-                triggers = triggers_from_thresholds(
-                    thresholds,
-                    delay_s=9.0,
-                    first_delay_s=0.0
-                )
+        # ==========================================================
+        # Module information and testing
+        # ==========================================================
 
-                channel_count = self.get_channel_count_for_robot(self.robot_data, rid)
-                await self.send_triggers_incrementally(
-                    triggers=triggers,
-                    clear_first=True,
-                    channel_count=channel_count,
-                    default_delay_s=None,
-                    wait_for_ack=False,  # set True if you want to pace by MCU acks
-                    ack_timeout_s=1.5,
-                )
+        if t == "get_modules":
+            await self.responses.put({
+                "type": "modules",
+                "items": MODULES,
+            })
+            return
 
-                await self.responses.put({
-                    "type": "selection_applied",
-                    "robot_id": rid,
-                    "blade_id": bid,
-                    "thresholds": thresholds,
-                })
+        if t == "test_module":
+            module_id = cmd.get("id")
 
-                self.robot_data["defaults"] = {"robot_id": rid, "blade_id": bid}
-                save_robot_list(self.robot_data)
-
-            except Exception as e:
+            if (
+                not module_id
+                or module_id not in MODULE_BY_ID
+            ):
                 await self.responses.put({
                     "type": "error",
-                    "error": "apply_failed",
-                    "details": str(e),
+                    "error": "bad_request",
+                    "details": "unknown module id",
+                    "id": module_id,
                 })
-            return
-
-
-        elif t == "save_transitions":
-            rid = cmd.get("robot_id")
-            bid = cmd.get("blade_id")
-            vals = cmd.get("values")
-            try:
-                self.robot_data["transitions"].setdefault(rid, {})[bid] = vals
-                save_robot_list(self.robot_data)
-
-                thresholds = thresholds_for_mcu(self.robot_data, [float(v) for v in vals])
-                triggers = triggers_from_thresholds(
-                    thresholds,
-                    delay_s=9.0,
-                    first_delay_s=0.0
-                )
-
-
-                channel_count = self.get_channel_count_for_robot(self.robot_data, rid)
-                await self.send_triggers_incrementally(
-                    triggers=triggers,
-                    clear_first=True,   # new transitions should replace prior set
-                    channel_count=channel_count,
-                    default_delay_s=None,
-                    wait_for_ack=False,
-                    ack_timeout_s=1.5,
-                )
-
-                await self.responses.put({"type": "ack", "ok": True, "info": "saved"})
-                mt = self.robot_data.get("motor_tuning", {
-                    "max_speed_qpps": 2500,
-                    "accel_qpps_s": 4250,
-                    "decel_qpps_s": 8500
-                })
-
-                await self.responses.put({
-                    "type": "robot_list",
-                    "robots": self.robot_data["robots"],
-                    "blade_types": self.robot_data["blade_types"],
-                    "transitions": self.robot_data["transitions"],
-                    "defaults": self.robot_data.get("defaults", {}),
-                    "motor_tuning": {
-                        "max_speed_mps": qpps_to_mps(
-                            mt["max_speed_qpps"], WHEEL_DIAMETER_M, ENCODER_CPR
-                        ),
-                        "accel_mps2": qpps_to_mps(
-                            mt["accel_qpps_s"], WHEEL_DIAMETER_M, ENCODER_CPR
-                        ),
-                        "decel_mps2": qpps_to_mps(
-                            mt["decel_qpps_s"], WHEEL_DIAMETER_M, ENCODER_CPR
-                        ),
-                    },
-                })
-                await self.responses.put({
-                    "type": "selection_applied",
-                    "robot_id": rid,
-                    "blade_id": bid,
-                    "thresholds": thresholds,
-                })
-
-            except Exception as e:
-                await self.responses.put({
-                    "type": "error",
-                    "error": "save_failed",
-                    "details": str(e),
-                })
-            return
-
-        elif t == "get_modules":
-            await self.responses.put({"type": "modules", "items": MODULES})
-            return
-        
-        elif t == "set_motor_tuning":
-            try:
-                # HMI sends physical units
-                max_speed_mps = float(cmd.get("max_speed"))
-                accel_mps2 = float(cmd.get("accel"))
-                decel_mps2 = float(cmd.get("decel"))
-
-                if max_speed_mps < 0:
-                    raise ValueError("max_speed must be >= 0")
-                if accel_mps2 < 0:
-                    raise ValueError("accel must be >= 0")
-                if decel_mps2 < 0:
-                    raise ValueError("decel must be >= 0")
-
-                # Convert to MCU/RoboClaw units
-                max_speed_qpps = mps_to_qpps(
-                    max_speed_mps,
-                    WHEEL_DIAMETER_M,
-                    ENCODER_CPR
-                )
-
-                accel_qpps = mps_to_qpps(
-                    accel_mps2,
-                    WHEEL_DIAMETER_M,
-                    ENCODER_CPR
-                )
-
-                decel_qpps = mps_to_qpps(
-                    decel_mps2,
-                    WHEEL_DIAMETER_M,
-                    ENCODER_CPR
-                )
-
-                # Persist hardware units
-                self.robot_data["motor_tuning"] = {
-                    "max_speed_qpps": max_speed_qpps,
-                    "accel_qpps_s": accel_qpps,
-                    "decel_qpps_s": decel_qpps
-                }
-
-                save_robot_list(self.robot_data)
-
-                # Apply immediately to MCU
-                await self.mcu_writes.put({
-                    "action": "set_motor_tuning",
-                    "max_speed": max_speed_qpps,
-                    "accel": accel_qpps,
-                    "decel": decel_qpps,
-
-                    # Also send physical units for PID slew limiting
-                    "accel_mps2": accel_mps2,
-                    "decel_mps2": decel_mps2
-                })
-
-                await self.responses.put({
-                    "type": "ack",
-                    "ok": True,
-                    "info": "motor_tuning_saved"
-                })
-
-            except Exception as e:
-                await self.responses.put({
-                    "type": "error",
-                    "error": "motor_tuning_failed",
-                    "details": str(e)
-                })
-
-            return
-
-        elif t == "test_module":
-            mid = cmd.get("id")
-            if not mid or mid not in MODULE_BY_ID:
-                await self.responses.put({"type":"error","error":"bad_request","details":"unknown module id","id":mid})
                 return
 
-            mod = MODULE_BY_ID[mid]
-            cat = mod["category"]
+            module = MODULE_BY_ID[module_id]
+            category = module["category"]
 
-            # Ack immediately so HMI shows "Running"
-            await self.responses.put({"type":"ack","ok":True,"info":"test_started","id":mid})
+            # Acknowledge immediately so the HMI can show
+            # that the test is running.
+            await self.responses.put({
+                "type": "ack",
+                "ok": True,
+                "info": "test_started",
+                "id": module_id,
+            })
 
-            if cat == "motor":
+            if category == "motor":
                 await self.mcu_writes.put({
-                    "action":"test_motor","id":mid,
-                    "index": int(mod.get("index",0)),
-                    "speed": 0.02, "duration_ms": 600
+                    "action": "test_motor",
+                    "id": module_id,
+                    "index": int(
+                        module.get(
+                            "index",
+                            0,
+                        )
+                    ),
+                    "speed": 0.02,
+                    "duration_ms": 600,
                 })
-            elif cat == "actuator":
+
+            elif category == "actuator":
                 await self.mcu_writes.put({
-                    "action":"test_actuator","id":mid,
-                    "channel": int(mod.get("channel",0)),
-                    "voltage": 3.0, "tolerance": 0.8, "settle_ms": 100
+                    "action": "test_actuator",
+                    "id": module_id,
+                    "channel": int(
+                        module.get(
+                            "channel",
+                            0,
+                        )
+                    ),
+                    "voltage": 3.0,
+                    "tolerance": 0.8,
+                    "settle_ms": 100,
                 })
-            elif cat == "sensor":
-                sensor_kind = mod.get("sensor","ultrasonic")
-                payload = {"action":"test_sensor","id":mid,"sensor": sensor_kind}
+
+            elif category == "sensor":
+                sensor_kind = module.get(
+                    "sensor",
+                    "ultrasonic",
+                )
+
+                payload = {
+                    "action": "test_sensor",
+                    "id": module_id,
+                    "sensor": sensor_kind,
+                }
+
                 if sensor_kind == "digital":
-                    payload["pin"] = int(mod.get("pin",1))
-                    payload["expect"] = bool(mod.get("expect",True))
+                    payload["pin"] = int(
+                        module.get(
+                            "pin",
+                            1,
+                        )
+                    )
+
+                    payload["expect"] = bool(
+                        module.get(
+                            "expect",
+                            True,
+                        )
+                    )
+
                     payload["sample_ms"] = 300
+
                 await self.mcu_writes.put(payload)
-            elif cat == "andon":
-                await self.mcu_writes.put({"action":"test_light","id": mid})
-            elif cat == "servo":
-                await self.mcu_writes.put({"action": "test_servo", "id": mid})
+
+            elif category == "andon":
+                await self.mcu_writes.put({
+                    "action": "test_light",
+                    "id": module_id,
+                })
+
+            elif category == "servo":
+                await self.mcu_writes.put({
+                    "action": "test_servo",
+                    "id": module_id,
+                })
+
             else:
-                await self.responses.put({"type":"error","error":"unsupported_module","details":f"category={cat}","id":mid})
+                await self.responses.put({
+                    "type": "error",
+                    "error": "unsupported_module",
+                    "details": (
+                        f"category={category}"
+                    ),
+                    "id": module_id,
+                })
+
             return
 
+        # ==========================================================
+        # Unhandled commands
+        # ==========================================================
+
+        # Preserve the existing behavior for commands handled by
+        # another application component.
         await self.commands.put(cmd)
 
 
     async def response_producer(self, websocket):
-        while True:
-            response = await self.responses.get()
-            await websocket.send(json.dumps({'response':response}))
+        """
+        Sends queued robot responses to the connected HMI.
+        """
+        try:
+            while True:
+                response = await self.responses.get()
 
-            #response = await self.mcu_reads.get()
-            #await websocket.send(json.dumps({'mcu_reads':response}))
+                try:
+                    await websocket.send(
+                        json.dumps({
+                            "response": response,
+                        })
+                    )
+
+                finally:
+                    # asyncio.Queue does not require task_done unless another
+                    # part of the application calls queue.join(). If your
+                    # custom Queues implementation uses join(), uncomment:
+                    #
+                    # self.responses.task_done()
+                    pass
+
+        except asyncio.CancelledError:
+            # Expected when the consumer finishes or the connection closes.
+            raise
+
+        except websockets.exceptions.ConnectionClosedOK:
+            self.logger.log.info(
+                "HMI WebSocket response producer closed normally."
+            )
+
+        except websockets.exceptions.ConnectionClosedError as error:
+            self.logger.log.warning(
+                f"HMI WebSocket response producer lost connection: {error}"
+            )
+
+        except websockets.exceptions.ConnectionClosed:
+            self.logger.log.info(
+                "HMI WebSocket response producer connection closed."
+            )
+
+        except Exception:
+            self.logger.log.exception(
+                "Unexpected WebSocket response-producer error."
+            )
 
 
     # -------------------------
@@ -914,3 +2395,38 @@ class WebsocketServer():
                         f"WS: No matching trigger ACK for count={expected_count} "
                         f"within {ack_timeout_s}s; continuing..."
                     )
+
+    @staticmethod
+    def validate_actor_initials(
+        cmd: Dict[str, Any],
+    ) -> str:
+        import re
+
+        initials = str(
+            cmd.get(
+                "actor_initials",
+                "",
+            )
+        ).strip().upper()
+
+        if not re.fullmatch(
+            r"[A-Z]{2,6}",
+            initials,
+        ):
+            raise ValueError(
+                "actor_initials must contain "
+                "2 to 6 letters."
+            )
+
+        return initials
+
+    async def flush_encoder_checkpoint(
+        self,
+    ) -> None:
+        try:
+            await self.encoder_persistence.flush()
+
+        except Exception:
+            self.logger.log.exception(
+                "Failed to flush encoder checkpoint."
+            )

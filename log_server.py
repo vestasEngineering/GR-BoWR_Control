@@ -22,7 +22,3 @@ class LogServer():
         app = web.Application()
         app.add_routes([web.get('/', self.handle)])
         web.run_app(app, host=self.host, port=self.port)
-
-
-
-    
