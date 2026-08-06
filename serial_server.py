@@ -25,6 +25,7 @@ class SerialServer:
         self.trigger_acks = queues.trigger_acks
         self.encoder_acks = queues.encoder_acks
         self.mcu_ready = queues.mcu_ready
+        self.h7_runtime_ready = queues.h7_runtime_ready
         self.ultrasonic_dbg = queues.ultrasonic_dbg
         self.ultrasonic_log_path = self._build_ultrasonic_log_path()
 
@@ -40,8 +41,8 @@ class SerialServer:
         # RX rolling buffer for brace-balanced extraction (B)
         self._rx_buf: str = ""
 
-        # Initial startup messages (queued; will be sent after first connect)
-        self.mcu_writes.put_nowait({"speed0": 0, "speed1": 0, "speed2": 0, "speed3": 0})
+        # Runtime startup requests are queued per serial session only after
+        # the H7 publishes runtime_ready.
 
     def log_ultrasonic(self, msg):
         import os, csv
@@ -189,6 +190,7 @@ class SerialServer:
             backoff = 1.0
             self._rx_buf = ""
             self.mcu_ready.clear()
+            self.h7_runtime_ready.clear()
 
             self.encoder_runtime_events = asyncio.Queue()
 
@@ -206,14 +208,6 @@ class SerialServer:
                 f"device={self.device}"
             )
 
-            await self.mcu_writes.put({
-                "action": "ping",
-            })
-
-            await self.mcu_writes.put({
-                "action": "get_firmware_features",
-            })
-
             # 2) Spawn communication tasks.
             self.send_task = asyncio.create_task(
                 self.send(),
@@ -225,6 +219,11 @@ class SerialServer:
                 name="mcu-serial-receive",
             )
 
+            runtime_startup_task = asyncio.create_task(
+                self.queue_runtime_startup_requests(),
+                name="mcu-runtime-startup-requests",
+            )
+
             await asyncio.sleep(1.0)
 
             if self._stopping:
@@ -234,6 +233,7 @@ class SerialServer:
                     for task in (
                         self.send_task,
                         self.receive_task,
+                        runtime_startup_task,
                     )
                     if task is not None
                     and not task.done()
@@ -249,6 +249,7 @@ class SerialServer:
                     )
 
                 self.mcu_ready.clear()
+                self.h7_runtime_ready.clear()
                 self.close_serial()
                 break
 
@@ -257,13 +258,18 @@ class SerialServer:
                 name="mcu-serial-heartbeat",
             )
 
+            # Only long-running communication tasks define the lifetime of
+            # the serial session. runtime_startup_task is intentionally not
+            # included because it is a one-shot task that exits normally after
+            # queueing startup requests. Treating its normal completion as a
+            # transport failure caused the serial port to reconnect immediately.
             session_tasks = {
                 self.send_task,
                 self.receive_task,
                 self.heartbeat_task,
             }
 
-            # 3) Wait for any communication task to exit.
+            # 3) Wait for a long-running communication task to exit.
             done, pending = await asyncio.wait(
                 session_tasks,
                 return_when=asyncio.FIRST_COMPLETED,
@@ -303,7 +309,12 @@ class SerialServer:
                     completed_task_names
                 )
 
-            # 4) Cancel tasks that belong to the failed connection.
+            # 4) Cancel tasks that belong to the failed connection. The
+            # one-shot runtime startup task is cleaned up here but does not
+            # define the lifetime of the serial session.
+            if not runtime_startup_task.done():
+                pending.add(runtime_startup_task)
+
             for task in pending:
                 task.cancel()
 
@@ -337,6 +348,7 @@ class SerialServer:
                 )
 
             self.mcu_ready.clear()
+            self.h7_runtime_ready.clear()
             self.close_serial()
 
             # Clear references to tasks from the completed session.
@@ -355,60 +367,152 @@ class SerialServer:
     # --------------------------
     # Tasks
     # --------------------------
-    async def heartbeat(self, period_s: float = 1.0):
+    async def heartbeat(
+        self,
+        period_s: float = 1.0,
+    ):
         try:
+            await self.h7_runtime_ready.wait()
+
             while not self._stopping:
-                if not self.mcu or not getattr(self.mcu, "is_open", False):
+                if (
+                    not self.mcu
+                    or not getattr(
+                        self.mcu,
+                        "is_open",
+                        False,
+                    )
+                ):
+                    break
+
+                if not self.h7_runtime_ready.is_set():
                     break
 
                 if self.mcu_writes.empty():
-                    await self.mcu_writes.put({"hb": 1})
+                    await self.mcu_writes.put({
+                        "hb": 1,
+                    })
 
-                await asyncio.sleep(period_s)
+                await asyncio.sleep(
+                    period_s
+                )
+
         except asyncio.CancelledError:
-            return
+            raise
 
     def _encode_line(self, msg: dict) -> bytes:
         return (json.dumps(msg, separators=(',', ':')) + '\n').encode('utf-8')
 
     async def send(self):
-        """Drain outbound queue while port is open."""
+        """
+        Drain the outbound MCU queue only after the H7 explicitly
+        reports runtime readiness.
+
+        Messages may be queued during H7 startup, but they must not be
+        written to UART until the normal H7 serial state machine has run.
+        """
         try:
             while True:
-                if not self.mcu or not getattr(self.mcu, "is_open", False):
-                    self.logger.log.info("Serial port is closed. Exiting send loop.")
+                if (
+                    not self.mcu
+                    or not getattr(
+                        self.mcu,
+                        "is_open",
+                        False,
+                    )
+                ):
+                    self.logger.log.info(
+                        "Serial port is closed. "
+                        "Exiting send loop."
+                    )
+                    break
+
+                if not self.h7_runtime_ready.is_set():
+                    try:
+                        await asyncio.wait_for(
+                            self.h7_runtime_ready.wait(),
+                            timeout=1.0,
+                        )
+
+                    except asyncio.TimeoutError:
+                        continue
+
+                if (
+                    not self.mcu
+                    or not getattr(
+                        self.mcu,
+                        "is_open",
+                        False,
+                    )
+                ):
                     break
 
                 msg = await self.mcu_writes.get()
-                self.logger.log.info(f"PI TX: {msg}")
+
+                # The serial session may have been lost after queue.get().
+                # Requeue the message rather than transmitting it into an
+                # invalid or not-yet-ready session.
+
+                if not self.h7_runtime_ready.is_set():
+                    await self.mcu_writes.put(msg)
+                    continue
+
+                self.logger.log.info(
+                    f"PI TX: {msg}"
+                )
 
                 try:
-                    # Pi -> MCU is framed <JSON> (you already did this; keep it)
                     raw = self._encode_line(msg)
-                    #self.logger.log.info(f"TX raw: {raw!r}")
+
                     self.mcu.write(raw)
                     self.mcu.flush()
-                    self._last_tx = asyncio.get_running_loop().time()
-                except (serial.SerialException, serial.SerialTimeoutException) as e:
-                    # Re-queue the message so it isn't lost, then exit loop to trigger reconnect
-                    self.logger.log.error(f"Serial write error: {e}. Will reconnect.")
+
+                    self._last_tx = (
+                        asyncio
+                        .get_running_loop()
+                        .time()
+                    )
+
+                except (
+                    serial.SerialException,
+                    serial.SerialTimeoutException,
+                ) as error:
+                    self.logger.log.error(
+                        "Serial write error: "
+                        f"{error}. Will reconnect."
+                    )
+
                     try:
-                        self.mcu_writes.put_nowait(msg)
+                        self.mcu_writes.put_nowait(
+                            msg
+                        )
                     except Exception:
                         pass
+
                     break
-                except Exception as e:
-                    self.logger.log.error(f"Unexpected send error: {e}")
-                    # Re-queue once; then exit
+
+                except Exception as error:
+                    self.logger.log.error(
+                        "Unexpected send error: "
+                        f"{error}"
+                    )
+
                     try:
-                        self.mcu_writes.put_nowait(msg)
+                        self.mcu_writes.put_nowait(
+                            msg
+                        )
                     except Exception:
                         pass
+
                     break
 
                 await asyncio.sleep(0.03)
+
         except asyncio.CancelledError:
-            self.logger.log.info("Send task cancelled.")
+            self.logger.log.info(
+                "Send task cancelled."
+            )
+            raise
 
     # --------------------------
     # Robust RX: brace-balanced extraction (B)
@@ -585,11 +689,27 @@ class SerialServer:
                             f"keys={list(diag.keys())}"
                         )
 
+                    elif (
+                        msg_dict.get("type") == "status"
+                        and msg_dict.get("module") == "runtime"
+                        and msg_dict.get("status") == "runtime_ready"
+                    ):
+                        self.h7_runtime_ready.set()
+                        await self.mcu_reads.put(msg_dict)
+
+                        self.logger.log.info(
+                            "H7 runtime ready. The firmware setup sequence "
+                            "has completed and normal command processing "
+                            "is available."
+                        )
+
                     elif msg_dict.get("type") == "boot_health":
                         await self.mcu_reads.put(msg_dict)
+
                         self.logger.log.info(
                             f"Boot health ok={msg_dict.get('ok')} "
-                            f"checks={list((msg_dict.get('checks') or {}).keys())}"
+                            f"checks="
+                            f"{list((msg_dict.get('checks') or {}).keys())}"
                         )
 
                     elif msg_dict.get("type") == "test_result":
@@ -703,4 +823,26 @@ class SerialServer:
             pass
 
         self.mcu_ready.clear()
+        self.h7_runtime_ready.clear()
         self.close_serial()
+
+    async def queue_runtime_startup_requests(
+        self,
+    ) -> None:
+        """Queue one-time requests after the H7 can process commands."""
+        await self.h7_runtime_ready.wait()
+
+        await self.mcu_writes.put({
+            "speed0": 0,
+            "speed1": 0,
+            "speed2": 0,
+            "speed3": 0,
+        })
+
+        await self.mcu_writes.put({
+            "action": "ping",
+        })
+
+        await self.mcu_writes.put({
+            "action": "get_firmware_features",
+        })

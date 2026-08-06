@@ -591,6 +591,54 @@ class ConfigurationDatabaseMixin:
             )
             self.conn.commit()
 
+    def get_applied_transition_profile_snapshot(
+        self,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Return the transition values last recorded as applied to the H7.
+
+        This reads configuration_state.applied_values_json rather than the
+        currently selected or edited profile. The Control HMI must display
+        what was applied, not what an administrator is viewing or editing.
+        """
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT
+                    applied_profile_id,
+                    selected_robot_type_id,
+                    selected_blade_type_id,
+                    applied_source,
+                    applied_values_json,
+                    applied_at
+                FROM configuration_state
+                WHERE id = 1
+                """
+            ).fetchone()
+
+        if row is None or row["applied_profile_id"] is None:
+            return None
+
+        values = self._json_loads(
+            row["applied_values_json"],
+            [],
+        )
+
+        clean_values = self._validate_transition_values(
+            values,
+            8,
+        )
+
+        return {
+            "profile_id": int(row["applied_profile_id"]),
+            "robot_id": row["selected_robot_type_id"],
+            "blade_id": row["selected_blade_type_id"],
+            "effective_source": row["applied_source"],
+            "transition_values": clean_values,
+            "applied_at": row["applied_at"],
+        }
+
+
     def _insert_configuration_event_locked(self, event_type: str, robot_type_id: Optional[str],
                                            blade_type_id: Optional[str], *, actor: Optional[str],
                                            source: Optional[str], before: Any, after: Any,

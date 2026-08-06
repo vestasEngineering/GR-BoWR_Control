@@ -1408,29 +1408,63 @@ class DatabaseService(
         self,
         job_uuid: str,
         result: str,
+        *,
+        failure_reason: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        normalized_result = result.strip().upper()
+        normalized_result = str(result or "").strip().upper()
+
+        result_aliases = {
+            "CANCELED": "CANCELLED",
+            "ABORTED": "CANCELLED",
+        }
+        normalized_result = result_aliases.get(
+            normalized_result,
+            normalized_result,
+        )
+
+        if normalized_result not in {
+            "PASS",
+            "FAIL",
+            "CANCELLED",
+        }:
+            raise ValueError(
+                "result must be PASS, FAIL, or CANCELLED."
+            )
+
+        normalized_failure_reason: Optional[str] = None
+
+        if failure_reason is not None:
+            if not isinstance(failure_reason, str):
+                raise ValueError(
+                    "failure_reason must be text."
+                )
+
+            normalized_failure_reason = failure_reason.strip()
+
+            if len(normalized_failure_reason) > 500:
+                raise ValueError(
+                    "failure_reason cannot exceed 500 characters."
+                )
+
+            if not normalized_failure_reason:
+                normalized_failure_reason = None
 
         if normalized_result == "PASS":
             state = "COMPLETED"
-            failure_reason = None
-        elif normalized_result in {
-            "CANCELLED",
-            "CANCELED",
-            "ABORTED",
-        }:
+            normalized_failure_reason = None
+        elif normalized_result == "CANCELLED":
             state = "CANCELLED"
-            failure_reason = normalized_result
+            normalized_failure_reason = None
         else:
             state = "FAILED"
-            failure_reason = normalized_result
 
         return self.update_job_state(
             job_uuid,
             state,
             result=normalized_result,
-            failure_reason=failure_reason,
+            failure_reason=normalized_failure_reason,
         )
+
 
     def insert_job_event(
         self,

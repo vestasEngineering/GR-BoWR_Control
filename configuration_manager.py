@@ -13,6 +13,9 @@ class ConfigurationManager:
     def catalog(self) -> Dict[str, Any]:
         return self.db.get_configuration_catalog()
 
+    def applied_snapshot(self) -> Dict[str, Any] | None:
+        return self.db.get_applied_transition_profile_snapshot()
+
     async def apply(self, robot_id: str, blade_id: str) -> Dict[str, Any]:
         profile = self.db.get_transition_profile(robot_id, blade_id)
         catalog = self.db.get_configuration_catalog()
@@ -29,7 +32,7 @@ class ConfigurationManager:
         await self.trigger_sender(
             triggers=triggers, clear_first=True,
             channel_count=int(profile["channels"]), default_delay_s=None,
-            wait_for_ack=True, ack_timeout_s=3.0,
+            wait_for_ack=True, ack_timeout_s=5.0,
         )
         self.db.mark_profile_applied(profile)
         return {**profile, "thresholds": thresholds}

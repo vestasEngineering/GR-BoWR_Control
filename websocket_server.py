@@ -74,6 +74,23 @@ class WebsocketServer():
         self.latest_process_status: Optional[dict] = None
         self.latest_actuator_status: Optional[dict] = None
 
+        self.h7_runtime_ready = queues.h7_runtime_ready
+
+        self.encoder_startup_ready = False
+        self.encoder_startup_error: Optional[str] = None
+
+        self.configuration_loaded_to_mcu = False
+        self.configuration_apply_error: Optional[str] = None
+
+        self.startup_complete = asyncio.Event()
+        self.startup_error: Optional[str] = None
+        self._startup_task: Optional[asyncio.Task] = None
+        self._initial_runtime_configuration_attempted = False
+
+        self._configuration_apply_lock = asyncio.Lock()
+        self._configuration_reapply_event = asyncio.Event()
+        self._configuration_reapply_task: Optional[asyncio.Task] = None
+
         self._last_actuator_fault_signature = (0, False)
 
         self.encoder_persistence = EncoderPersistenceCoordinator(
@@ -94,58 +111,410 @@ class WebsocketServer():
 
 
     async def run(self):
+        """
+        Start the WebSocket listener immediately.
+
+        MCU encoder recovery and persisted configuration application run in a
+        separate startup task so an MCU timeout cannot prevent the HMI from
+        connecting to port 5000.
+
+        Robot actions that depend on initialization must continue to check their
+        own readiness conditions before being accepted.
+        """
         await self.encoder_persistence.start_serial_runtime()
-        health_task = asyncio.create_task(self.health_pump())
+
+        health_task = asyncio.create_task(
+            self.health_pump(),
+            name="websocket-health-pump",
+        )
+
+        self._startup_task = asyncio.create_task(
+            self.initialize_robot_runtime(),
+            name="websocket-robot-runtime-initialization",
+        )
+
+        self._configuration_reapply_task = asyncio.create_task(
+            self.configuration_reapply_worker(),
+            name="websocket-configuration-reapply",
+        )
 
         try:
-            try:
-                await self.encoder_persistence.startup_recovery(
-                    ready_timeout_s=20.0,
-                )
-            except asyncio.TimeoutError:
-                self.logger.log.error(
-                    "Encoder startup recovery timed out. "
-                )
-            except Exception:
-                self.logger.log.exception(
-                    "Encoder startup recovery failed."
-                )
-
-            try:
-                catalog = self.config_manager.catalog()
-                selection = catalog.get("selection", {})
-                rid = selection.get("robot_id")
-                bid = selection.get("blade_id")
-
-                if rid and bid:
-                    await self.config_manager.apply(rid, bid)
-                    self.logger.log.info(
-                        "Applied persisted configuration selection: "
-                        f"robot_id={rid}, blade_id={bid}"
-                    )
-                else:
-                    self.logger.log.warning(
-                        "No persisted robot/blade selection is available."
-                    )
-
-            except Exception:
-                self.logger.log.exception(
-                    "Failed to apply the persisted robot configuration."
-                )
+            self.logger.log.info(
+                "Starting HMI WebSocket server on 0.0.0.0:5000."
+            )
 
             async with serve(
                 self.connection_handler,
                 "0.0.0.0",
                 5000,
+                ping_interval=20,
+                ping_timeout=20,
+                close_timeout=5,
             ):
+                self.logger.log.info(
+                    "HMI WebSocket server listening on 0.0.0.0:5000."
+                )
+
                 await self.shutdown_event.wait()
 
+        except OSError:
+            self.logger.log.exception(
+                "Failed to bind HMI WebSocket server to 0.0.0.0:5000."
+            )
+            raise
+
         finally:
-            health_task.cancel()
+            tasks = [health_task]
+
+            if self._startup_task is not None:
+                tasks.append(self._startup_task)
+
+            if self._configuration_reapply_task is not None:
+                tasks.append(self._configuration_reapply_task)
+
+            for task in tasks:
+                task.cancel()
+
             await asyncio.gather(
-                health_task,
+                *tasks,
                 return_exceptions=True,
             )
+
+    async def apply_persisted_configuration(
+        self,
+    ) -> bool:
+        async with self._configuration_apply_lock:
+            if self.configuration_loaded_to_mcu:
+                return True
+
+            try:
+                catalog = self.config_manager.catalog()
+
+                selection = catalog.get(
+                    "selection",
+                    {},
+                )
+
+                robot_id = str(
+                    selection.get(
+                        "robot_id",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                blade_id = str(
+                    selection.get(
+                        "blade_id",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                if not robot_id or not blade_id:
+                    raise RuntimeError(
+                        "No persisted robot and blade "
+                        "selection is available."
+                    )
+
+                self.logger.log.info(
+                    "Applying persisted robot configuration: "
+                    f"robot_id={robot_id}, "
+                    f"blade_id={blade_id}"
+                )
+
+                result = await self.config_manager.apply(
+                    robot_id,
+                    blade_id,
+                )
+
+                values = result.get(
+                    "effective_values",
+                    [],
+                )
+
+                if not isinstance(values, list) or not values:
+                    raise RuntimeError(
+                        "The applied profile contains "
+                        "no transition values."
+                    )
+
+                self.configuration_loaded_to_mcu = True
+                self.configuration_apply_error = None
+
+                self.logger.log.info(
+                    "Persisted configuration applied to H7: "
+                    f"robot_id={robot_id}, "
+                    f"blade_id={blade_id}, "
+                    f"transition_count={len(values)}"
+                )
+
+                await self.responses.put({
+                    "type":
+                        "configuration_runtime_status",
+                    "loaded": True,
+                    "robot_id": robot_id,
+                    "blade_id": blade_id,
+                    "transition_count": len(values),
+                })
+
+                return True
+
+            except asyncio.CancelledError:
+                raise
+
+            except Exception as error:
+                self.configuration_loaded_to_mcu = False
+                self.configuration_apply_error = str(error)
+
+                self.logger.log.exception(
+                    "Failed to apply persisted "
+                    "configuration to H7."
+                )
+
+                await self.responses.put({
+                    "type":
+                        "configuration_runtime_status",
+                    "loaded": False,
+                    "error": str(error),
+                })
+
+                return False
+
+    async def initialize_robot_runtime(self):
+        """
+        Wait for H7 boot completion, then initialize configuration and
+        encoder recovery as separate startup requirements.
+
+        A failure in one stage must not prevent the other stage from
+        being attempted. Process start remains blocked until both are
+        valid.
+        """
+        try:
+            self.logger.log.info(
+                "Waiting for H7 runtime readiness."
+            )
+
+            try:
+                await asyncio.wait_for(
+                    self.h7_runtime_ready.wait(),
+                    timeout=30.0,
+                )
+
+            except asyncio.TimeoutError:
+                self.startup_error = (
+                    "H7 runtime readiness timed out."
+                )
+
+                self.logger.log.error(
+                    self.startup_error
+                )
+
+                await self.responses.put({
+                    "type": "startup_status",
+                    "state": "fault",
+                    "ready": False,
+                    "stage": "h7_runtime",
+                    "error": "h7_runtime_timeout",
+                    "message": self.startup_error,
+                })
+
+                return
+
+            self.logger.log.info(
+                "H7 runtime readiness achieved. Beginning runtime initialization."
+            )
+
+            # Apply configuration first. This loads the volatile H7
+            # triggerBuffer independently of encoder restoration.
+            self._initial_runtime_configuration_attempted = True
+
+            configuration_ready = (
+                await self.apply_persisted_configuration()
+            )
+
+            # Encoder recovery is a separate readiness requirement.
+            self.logger.log.info(
+                "Beginning MCU encoder startup recovery."
+            )
+
+            try:
+                await self.encoder_persistence.startup_recovery(
+                    ready_timeout_s=20.0,
+                )
+
+                self.encoder_startup_ready = (
+                    self.encoder_persistence.state
+                    == EncoderRecoveryState.VALID
+                )
+
+                if not self.encoder_startup_ready:
+                    raise RuntimeError(
+                        "Encoder recovery completed without "
+                        "reaching VALID state: "
+                        f"{self.encoder_persistence.state}"
+                    )
+
+                self.encoder_startup_error = None
+
+                self.logger.log.info(
+                    "MCU encoder startup recovery completed: "
+                    f"state={self.encoder_persistence.state}"
+                )
+
+            except asyncio.TimeoutError as error:
+                self.encoder_startup_ready = False
+                self.encoder_startup_error = (
+                    "Encoder startup recovery timed out."
+                )
+
+                self.logger.log.error(
+                    self.encoder_startup_error
+                )
+
+                await self.responses.put({
+                    "type": "startup_status",
+                    "state": "fault",
+                    "ready": False,
+                    "stage": "encoder_recovery",
+                    "error": "encoder_recovery_timeout",
+                    "message": (
+                        str(error)
+                        or self.encoder_startup_error
+                    ),
+                })
+
+            except asyncio.CancelledError:
+                raise
+
+            except Exception as error:
+                self.encoder_startup_ready = False
+                self.encoder_startup_error = str(error)
+
+                self.logger.log.exception(
+                    "Encoder startup recovery failed."
+                )
+
+                await self.responses.put({
+                    "type": "startup_status",
+                    "state": "fault",
+                    "ready": False,
+                    "stage": "encoder_recovery",
+                    "error": "encoder_recovery_failed",
+                    "message": str(error),
+                })
+
+            runtime_ready = (
+                configuration_ready
+                and self.encoder_startup_ready
+            )
+
+            if runtime_ready:
+                self.startup_error = None
+                self.startup_complete.set()
+
+                await self.responses.put({
+                    "type": "startup_status",
+                    "state": "ready",
+                    "ready": True,
+                    "stage": "complete",
+                    "configuration_loaded": True,
+                    "encoder_valid": True,
+                })
+
+                self.logger.log.info(
+                    "Robot runtime initialization completed."
+                )
+
+                return
+
+            self.startup_complete.clear()
+
+            errors = []
+
+            if not configuration_ready:
+                errors.append(
+                    self.configuration_apply_error
+                    or "Configuration was not loaded."
+                )
+
+            if not self.encoder_startup_ready:
+                errors.append(
+                    self.encoder_startup_error
+                    or "Encoder is not valid."
+                )
+
+            self.startup_error = " ".join(errors)
+
+            await self.responses.put({
+                "type": "startup_status",
+                "state": "fault",
+                "ready": False,
+                "stage": "incomplete",
+                "configuration_loaded":
+                    self.configuration_loaded_to_mcu,
+                "encoder_valid":
+                    self.encoder_startup_ready,
+                "message": self.startup_error,
+            })
+
+            self.logger.log.error(
+                "Robot runtime initialization incomplete: "
+                f"configuration_loaded="
+                f"{self.configuration_loaded_to_mcu}, "
+                f"encoder_valid="
+                f"{self.encoder_startup_ready}, "
+                f"error={self.startup_error}"
+            )
+
+        except asyncio.CancelledError:
+            self.logger.log.info(
+                "Robot runtime initialization cancelled."
+            )
+            raise
+
+    async def configuration_reapply_worker(self) -> None:
+        """Reapply the persisted trigger table after each H7 serial session."""
+        while True:
+            await self._configuration_reapply_event.wait()
+            self._configuration_reapply_event.clear()
+
+            try:
+                await asyncio.wait_for(
+                    self.h7_runtime_ready.wait(),
+                    timeout=30.0,
+                )
+
+                if self.configuration_loaded_to_mcu:
+                    continue
+
+                loaded = await self.apply_persisted_configuration()
+
+                if not loaded:
+                    self.logger.log.error(
+                        "Transition configuration reapply failed "
+                        "after MCU reconnection."
+                    )
+
+            except asyncio.TimeoutError:
+                self.configuration_loaded_to_mcu = False
+                self.configuration_apply_error = (
+                    "H7 runtime readiness timed out after "
+                    "serial connection restoration."
+                )
+                self.logger.log.error(
+                    self.configuration_apply_error
+                )
+
+            except asyncio.CancelledError:
+                raise
+
+            except Exception as error:
+                self.configuration_loaded_to_mcu = False
+                self.configuration_apply_error = str(error)
+                self.logger.log.exception(
+                    "Unexpected configuration reapply failure."
+                )
 
     async def connection_handler(self, websocket):
         """
@@ -158,6 +527,24 @@ class WebsocketServer():
 
         self.logger.log.info(
             "HMI WebSocket client connected."
+        )
+
+        await self.send_response(
+            websocket,
+            {
+                "type": "startup_status",
+                "state": (
+                    "ready"
+                    if self.startup_complete.is_set()
+                    else (
+                        "fault"
+                        if self.startup_error is not None
+                        else "initializing"
+                    )
+                ),
+                "ready": self.startup_complete.is_set(),
+                "error": self.startup_error,
+            },
         )
 
         try:
@@ -385,6 +772,40 @@ class WebsocketServer():
                         )
                     )
 
+                    if (
+                        event_type
+                        == "mcu_serial_connection_restored"
+                    ):
+                        self.configuration_loaded_to_mcu = False
+
+                        self.configuration_apply_error = (
+                            "Waiting for H7 runtime readiness "
+                            "after serial connection restoration."
+                        )
+
+                        self.startup_complete.clear()
+
+                        # The first serial connection belongs to initial startup.
+                        # initialize_robot_runtime() owns that configuration apply.
+                        #
+                        # After the initial attempt, every new serial session must
+                        # reload the volatile H7 trigger table.
+                        if self._initial_runtime_configuration_attempted:
+                            self._configuration_reapply_event.set()
+
+
+                        self.logger.log.warning(
+                            "MCU serial session restored. Waiting for H7 "
+                            "runtime readiness before reapplying transitions."
+                        )
+
+                    elif event_type == "mcu_serial_connection_lost":
+                        self.configuration_loaded_to_mcu = False
+                        self.configuration_apply_error = (
+                            "MCU serial connection was lost."
+                        )
+                        self.startup_complete.clear()
+
                     if self.job_manager is not None:
                         try:
                             self.job_manager.log_event(
@@ -537,9 +958,34 @@ class WebsocketServer():
                     await self.responses.put(msg)
                     continue
 
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("type") == "status"
+                    and msg.get("module") == "runtime"
+                    and msg.get("status") == "runtime_ready"
+                ):
+
+                    self.logger.log.info(
+                        "H7 runtime-ready message received. "
+                        "MCU command processing is available."
+                    )
+
+                    await self.responses.put(msg)
+
+                    continue
+
                 # 2) Quick synthesis from boot_health (immediate snapshot for HMI)
-                if isinstance(msg, dict) and msg.get("type") == "boot_health":
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("type") == "boot_health"
+                ):
                     bh = msg
+
+                    self.logger.log.info(
+                        "H7 boot-health message received. "
+                        "Waiting for runtime_ready before "
+                        "sending MCU commands."
+                    )
                     state = "ok" if bh.get("ok") else "fault"
                     synth = {
                         "type": "health",
@@ -864,6 +1310,9 @@ class WebsocketServer():
                     blade_id,
                 )
 
+                self.configuration_loaded_to_mcu = True
+                self.configuration_apply_error = None
+
                 await self.send_response(
                     websocket,
                     {
@@ -875,6 +1324,8 @@ class WebsocketServer():
                 )
 
             except Exception as error:
+                self.configuration_loaded_to_mcu = False
+                self.configuration_apply_error = str(error)
                 self.logger.log.exception(
                     "Failed to apply transition profile."
                 )
@@ -922,6 +1373,9 @@ class WebsocketServer():
                     )
                 )
 
+                self.configuration_loaded_to_mcu = True
+                self.configuration_apply_error = None
+
                 await self.send_response(
                     websocket,
                     {
@@ -933,6 +1387,8 @@ class WebsocketServer():
                 )
 
             except Exception as error:
+                self.configuration_loaded_to_mcu = False
+                self.configuration_apply_error = str(error)
                 self.logger.log.exception(
                     "Failed to save transition override."
                 )
@@ -1320,6 +1776,9 @@ class WebsocketServer():
                     )
                 )
 
+                self.configuration_loaded_to_mcu = True
+                self.configuration_apply_error = None
+
                 await self.send_response(
                     websocket,
                     {
@@ -1331,6 +1790,8 @@ class WebsocketServer():
                 )
 
             except Exception as error:
+                self.configuration_loaded_to_mcu = False
+                self.configuration_apply_error = str(error)
                 self.logger.log.exception(
                     "Failed to revert transition override."
                 )
@@ -1500,6 +1961,19 @@ class WebsocketServer():
         # ==========================================================
 
         if t == "start_process":
+            if not self.configuration_loaded_to_mcu:
+                await self.send_error(
+                    websocket,
+                    error="configuration_not_loaded",
+                    message=(
+                        "The Glue Card transition configuration has not "
+                        "been loaded into the robot controller."
+                    ),
+                    request_id=cmd.get("req_id"),
+                    details=self.configuration_apply_error,
+                )
+                return
+
             if (
                 self.encoder_persistence.state
                 != EncoderRecoveryState.VALID
@@ -1760,37 +2234,71 @@ class WebsocketServer():
                     )
 
                 job_uuid = str(
-                    cmd.get(
-                        "job_uuid",
-                        "",
-                    )
+                    cmd.get("job_uuid", "")
                 ).strip()
 
                 result = str(
-                    cmd.get(
-                        "result",
-                        "PASS",
-                    )
-                ).strip()
+                    cmd.get("result", "")
+                ).strip().upper()
+
+                raw_failure_reason = cmd.get(
+                    "failure_reason"
+                )
 
                 if not job_uuid:
                     raise ValueError(
                         "job_uuid is required."
                     )
 
+                if result not in {
+                    "PASS",
+                    "FAIL",
+                    "CANCELLED",
+                    "CANCELED",
+                    "ABORTED",
+                }:
+                    raise ValueError(
+                        "result must be PASS, FAIL, or CANCELLED."
+                    )
+
+                failure_reason: Optional[str] = None
+
+                if raw_failure_reason is not None:
+                    if not isinstance(
+                        raw_failure_reason,
+                        str,
+                    ):
+                        raise ValueError(
+                            "failure_reason must be text."
+                        )
+
+                    failure_reason = raw_failure_reason.strip()
+
+                    if len(failure_reason) > 500:
+                        raise ValueError(
+                            "failure_reason cannot exceed 500 characters."
+                        )
+
+                    if not failure_reason:
+                        failure_reason = None
+
+                if result != "FAIL":
+                    failure_reason = None
+
                 await self.encoder_persistence.flush()
 
-                completed_job = (
-                    self.job_manager.end_job(
-                        job_uuid=job_uuid,
-                        result=result,
-                    )
+                completed_job = self.job_manager.end_job(
+                    job_uuid=job_uuid,
+                    result=result,
+                    failure_reason=failure_reason,
                 )
 
                 self.logger.log.info(
-                    "Job completed: "
+                    "Job closed: "
                     f"job_uuid={job_uuid} "
-                    f"result={result}"
+                    f"result={completed_job.get('result')} "
+                    f"failure_reason_present="
+                    f"{bool(completed_job.get('failure_reason'))}"
                 )
 
                 await self.send_response(
@@ -1817,20 +2325,19 @@ class WebsocketServer():
 
             except Exception as error:
                 self.logger.log.exception(
-                    "Failed to complete job."
+                    "Failed to close job."
                 )
 
                 await self.send_error(
                     websocket,
                     error="end_job_failed",
-                    message=(
-                        "The job could not be completed."
-                    ),
+                    message="The job could not be closed.",
                     request_id=request_id,
                     details=str(error),
                 )
 
             return
+
 
         if t == "get_job_history":
             request_id = cmd.get(
@@ -1953,6 +2460,36 @@ class WebsocketServer():
                     ),
                     request_id=request_id,
                     details=str(error),
+                )
+
+            return
+
+        if t == "get_applied_transition_profile":
+            request_id = cmd.get("req_id")
+
+            try:
+                applied = self.config_manager.applied_snapshot()
+
+                if applied is None:
+                    raise ValueError(
+                        "No transition profile has been applied."
+                    )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "applied_transition_profile",
+                        **applied,
+                    },
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                await self.send_error(
+                    websocket,
+                    error="applied_profile_unavailable",
+                    message=str(error),
+                    request_id=request_id,
                 )
 
             return
@@ -2351,12 +2888,10 @@ class WebsocketServer():
             self.logger.log.debug("WS: set_triggers -> {'clear': True}")
 
             if wait_for_ack:
-                try:
-                    await self.wait_for_trigger_ack(expected_count=0, timeout_s=ack_timeout_s)
-                except asyncio.TimeoutError:
-                    self.logger.log.warning(
-                        "WS: No trigger ACK after clear within timeout; continuing..."
-                    )
+                await self.wait_for_trigger_ack(
+                    expected_count=0,
+                    timeout_s=ack_timeout_s,
+                )
 
         if not triggers_list:
             if clear_first:
@@ -2385,16 +2920,11 @@ class WebsocketServer():
 
             if wait_for_ack:
                 expected_count = idx + 1
-                try:
-                    await self.wait_for_trigger_ack(
-                        expected_count=expected_count,
-                        timeout_s=ack_timeout_s,
-                    )
-                except asyncio.TimeoutError:
-                    self.logger.log.warning(
-                        f"WS: No matching trigger ACK for count={expected_count} "
-                        f"within {ack_timeout_s}s; continuing..."
-                    )
+
+                await self.wait_for_trigger_ack(
+                    expected_count=expected_count,
+                    timeout_s=ack_timeout_s,
+                )
 
     @staticmethod
     def validate_actor_initials(

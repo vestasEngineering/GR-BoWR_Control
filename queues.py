@@ -15,6 +15,7 @@ class Queues():
         self.encoder_acks = asyncio.Queue()
         self.mcu_ready = asyncio.Event()
         self.ultrasonic_dbg = asyncio.Queue(50)
+        self.h7_runtime_ready = asyncio.Event()
 
     def show_queue_size(self):
         for q in self.queues:

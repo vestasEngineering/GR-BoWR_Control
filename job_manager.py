@@ -84,17 +84,35 @@ class JobManager:
         self.current_job = updated
         return updated
 
-    def end_job(self, *, job_uuid: str, result: str) -> Dict[str, Any]:
+    def end_job(
+        self,
+        *,
+        job_uuid: str,
+        result: str,
+        failure_reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
         active_job = self.get_active_job()
+
         if active_job is None:
             raise ValueError("There is no active job.")
+
         if active_job["job_uuid"] != job_uuid:
-            raise ValueError("The requested job is not the active job.")
-        completed_job = self.db.end_job(job_uuid, result)
+            raise ValueError(
+                "The requested job is not the active job."
+            )
+
+        completed_job = self.db.end_job(
+            job_uuid,
+            result,
+            failure_reason=failure_reason,
+        )
+
         if completed_job is None:
             raise ValueError("The job could not be found.")
+
         self.current_job = None
         return completed_job
+
 
     def log_event(
         self,
