@@ -404,27 +404,17 @@ class SerialServer:
         return (json.dumps(msg, separators=(',', ':')) + '\n').encode('utf-8')
 
     async def send(self):
-        """
-        Drain the outbound MCU queue only after the H7 explicitly
-        reports runtime readiness.
+        """Send queued commands only to the current ready H7 serial session.
 
-        Messages may be queued during H7 startup, but they must not be
-        written to UART until the normal H7 serial state machine has run.
+        Expired jog leases are discarded. Transient motion commands are never
+        requeued after a serial write failure, preventing replay after reconnect.
+        Private CM5 metadata keys beginning with an underscore are removed before
+        UART serialization.
         """
         try:
             while True:
-                if (
-                    not self.mcu
-                    or not getattr(
-                        self.mcu,
-                        "is_open",
-                        False,
-                    )
-                ):
-                    self.logger.log.info(
-                        "Serial port is closed. "
-                        "Exiting send loop."
-                    )
+                if not self.mcu or not getattr(self.mcu, "is_open", False):
+                    self.logger.log.info("Serial port is closed. Exiting send loop.")
                     break
 
                 if not self.h7_runtime_ready.is_set():
@@ -433,86 +423,82 @@ class SerialServer:
                             self.h7_runtime_ready.wait(),
                             timeout=1.0,
                         )
-
                     except asyncio.TimeoutError:
                         continue
 
-                if (
-                    not self.mcu
-                    or not getattr(
-                        self.mcu,
-                        "is_open",
-                        False,
-                    )
-                ):
+                if not self.mcu or not getattr(self.mcu, "is_open", False):
                     break
 
                 msg = await self.mcu_writes.get()
 
-                # The serial session may have been lost after queue.get().
-                # Requeue the message rather than transmitting it into an
-                # invalid or not-yet-ready session.
-
                 if not self.h7_runtime_ready.is_set():
-                    await self.mcu_writes.put(msg)
+                    if not msg.get("_transient_motion", False):
+                        await self.mcu_writes.put(msg)
                     continue
 
-                self.logger.log.info(
-                    f"PI TX: {msg}"
-                )
+                expires_at = msg.get("_expires_monotonic")
+                if expires_at is not None:
+                    now = asyncio.get_running_loop().time()
+                    if now >= float(expires_at):
+                        self.logger.log.debug(
+                            "Dropping expired transient motion command: "
+                            f"action={msg.get('action')} seq={msg.get('seq')}"
+                        )
+                        continue
+
+                wire_msg = {
+                    key: value
+                    for key, value in msg.items()
+                    if not str(key).startswith("_")
+                }
+
+                self.logger.log.info(f"PI TX: {wire_msg}")
 
                 try:
-                    raw = self._encode_line(msg)
-
+                    raw = self._encode_line(wire_msg)
                     self.mcu.write(raw)
                     self.mcu.flush()
+                    self._last_tx = asyncio.get_running_loop().time()
 
-                    self._last_tx = (
-                        asyncio
-                        .get_running_loop()
-                        .time()
-                    )
-
-                except (
-                    serial.SerialException,
-                    serial.SerialTimeoutException,
-                ) as error:
+                except (serial.SerialException, serial.SerialTimeoutException) as error:
                     self.logger.log.error(
                         "Serial write error: "
                         f"{error}. Will reconnect."
                     )
 
-                    try:
-                        self.mcu_writes.put_nowait(
-                            msg
+                    if not msg.get("_transient_motion", False):
+                        try:
+                            self.mcu_writes.put_nowait(msg)
+                        except Exception:
+                            pass
+                    else:
+                        self.logger.log.warning(
+                            "Discarded transient motion command after serial failure: "
+                            f"action={msg.get('action')} seq={msg.get('seq')}"
                         )
-                    except Exception:
-                        pass
-
                     break
 
                 except Exception as error:
-                    self.logger.log.error(
-                        "Unexpected send error: "
-                        f"{error}"
-                    )
+                    self.logger.log.error(f"Unexpected send error: {error}")
 
-                    try:
-                        self.mcu_writes.put_nowait(
-                            msg
+                    if not msg.get("_transient_motion", False):
+                        try:
+                            self.mcu_writes.put_nowait(msg)
+                        except Exception:
+                            pass
+                    else:
+                        self.logger.log.warning(
+                            "Discarded transient motion command after send failure: "
+                            f"action={msg.get('action')} seq={msg.get('seq')}"
                         )
-                    except Exception:
-                        pass
-
                     break
 
                 await asyncio.sleep(0.03)
 
         except asyncio.CancelledError:
-            self.logger.log.info(
-                "Send task cancelled."
-            )
+            self.logger.log.info("Send task cancelled.")
             raise
+
 
     # --------------------------
     # Robust RX: brace-balanced extraction (B)
@@ -648,11 +634,19 @@ class SerialServer:
                     elif msg_dict.get('status', '').lower() == "light_updated":
                         self.logger.log.info(f"Andon light updated to: {msg_dict.get('state')}")
 
-                    elif msg_dict.get("status", "").lower() == "triggers_loaded":
-                        # Dedicated ACK path for trigger programming
+                    elif msg_dict.get("status", "").lower() in (
+                        "triggers_loaded",
+                        "triggers_reconciled",
+                        "trigger_load_failed",
+                    ):
                         await self.trigger_acks.put(msg_dict)
+
                         self.logger.log.info(
-                            f"Trigger ACK received: count={msg_dict.get('count')}"
+                            "Trigger acknowledgement received: "
+                            f"status={msg_dict.get('status')} "
+                            f"ok={msg_dict.get('ok')} "
+                            f"count={msg_dict.get('count')} "
+                            f"position_mm={msg_dict.get('position_mm')}"
                         )
 
                     elif msg_dict.get("trigger_reached"):

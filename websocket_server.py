@@ -2,10 +2,9 @@ import asyncio
 import json
 import math
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-
 import websockets.exceptions
 from websockets.server import serve
-
+from service_runtime import ServiceRuntime
 from configuration_manager import ConfigurationManager
 from encoder_persistence import (EncoderPersistenceCoordinator, EncoderRecoveryState)
 from health import HealthModel
@@ -52,6 +51,7 @@ class WebsocketServer():
         self.mcu_reads = queues.mcu_reads
         self.mcu_writes = queues.mcu_writes
         self.connected = False
+        self._active_hmi_connections = set()
         self.shutdown_event = asyncio.Event()
         self.health = HealthModel()
         self.latest_health: Optional[dict] = None
@@ -68,6 +68,13 @@ class WebsocketServer():
             db=job_manager.db,
             mcu_writes=self.mcu_writes,
             trigger_sender=self.send_triggers_incrementally,
+            logger=self.logger,
+        )
+
+        self.service_runtime = ServiceRuntime(
+            db=job_manager.db,
+            mcu_writes=self.mcu_writes,
+            modules=MODULES,
             logger=self.logger,
         )
 
@@ -523,7 +530,8 @@ class WebsocketServer():
         The WebSocket server remains running after the tablet disconnects so
         that the HMI can reconnect automatically.
         """
-        self.connected = True
+        self._active_hmi_connections.add(websocket)
+        await self.publish_hmi_connection_state()
 
         self.logger.log.info(
             "HMI WebSocket client connected."
@@ -629,7 +637,8 @@ class WebsocketServer():
             )
 
         finally:
-            self.connected = False
+            self._active_hmi_connections.discard(websocket)
+            await self.publish_hmi_connection_state()
 
             self.logger.log.info(
                 "HMI WebSocket client disconnected."
@@ -639,7 +648,21 @@ class WebsocketServer():
             #
             # The server must remain running so the tablet can reconnect.
 
-        
+    async def publish_hmi_connection_state(self) -> None:
+        """Publish the current HMI WebSocket availability to the H7."""
+        connected = bool(self._active_hmi_connections)
+        self.connected = connected
+
+        await self.mcu_writes.put({
+            "action": "set_hmi_connected",
+            "connected": connected,
+        })
+
+        self.logger.log.info(
+            "Published HMI connection state to H7: "
+            f"connected={connected}"
+        )
+
     async def health_pump(self):
         """
         Consumes MCU messages (andon_diag, boot_health, test_result), computes a consolidated
@@ -649,8 +672,15 @@ class WebsocketServer():
             msg = await self.mcu_reads.get()
             try:
                 # 1) Pass-through module test results
-                if isinstance(msg, dict) and msg.get("type") == "test_result":
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("type") == "test_result"
+                ):
+                    self.service_runtime.accept_test_result(msg)
+                    
+                    await self.publish_hmi_connection_state()
                     await self.responses.put(msg)
+
                     continue
 
                 if isinstance(msg, dict) and msg.get("type") == "encoder_session":
@@ -1134,6 +1164,87 @@ class WebsocketServer():
             request_id=request_id,
         )
 
+    async def handle_service_request(self, websocket, cmd):
+        request_id = cmd.get("req_id")
+        request_type = cmd.get("type")
+        service_types = {
+            "get_service_summary",
+            "get_service_modules",
+            "get_diagnostic_catalog",
+            "get_service_events",
+            "start_diagnostic",
+            "get_diagnostic_status",
+            "abort_diagnostic",
+        }
+        if request_type not in service_types:
+            return False
+
+        try:
+            if request_type == "get_service_summary":
+                payload = self.service_runtime.summary(self)
+
+            elif request_type == "get_service_modules":
+                payload = {
+                    "type": "service_modules",
+                    "ok": True,
+                    "items": self.service_runtime.module_items(self),
+                }
+
+            elif request_type == "get_diagnostic_catalog":
+                payload = {
+                    "type": "diagnostic_catalog",
+                    "ok": True,
+                    "items": self.service_runtime.diagnostic_catalog(self),
+                }
+
+            elif request_type == "get_service_events":
+                result = self.job_manager.db.list_service_events(
+                    limit=int(cmd.get("limit", 50)),
+                    offset=int(cmd.get("offset", 0)),
+                    search=str(cmd.get("search", "")),
+                    level=str(cmd.get("level", "all")),
+                    source=str(cmd.get("source", "all")),
+                )
+                payload = {"type": "service_events", "ok": True, **result}
+
+            elif request_type == "start_diagnostic":
+                run = await self.service_runtime.start(
+                    diagnostic_id=str(cmd.get("diagnostic_id", "")),
+                    module_id=str(cmd.get("module_id", "")),
+                    actor=None,
+                    server=self,
+                )
+                payload = {"type": "diagnostic_started", "ok": True, "run": run}
+
+            elif request_type == "get_diagnostic_status":
+                run = self.service_runtime.status(str(cmd.get("run_id", "")))
+                payload = {"type": "diagnostic_status", "ok": True, "run": run}
+
+            else:
+                run = await self.service_runtime.abort(str(cmd.get("run_id", "")))
+                payload = {"type": "diagnostic_aborted", "ok": True, "run": run}
+
+            await self.send_response(websocket, payload, request_id=request_id)
+
+        except (TypeError, ValueError, RuntimeError) as error:
+            await self.send_error(
+                websocket,
+                error="service_request_rejected",
+                message=str(error),
+                request_id=request_id,
+            )
+        except Exception as error:
+            self.logger.log.exception("Service request failed.")
+            await self.send_error(
+                websocket,
+                error="service_request_failed",
+                message="The service request could not be completed.",
+                details=str(error),
+                request_id=request_id,
+            )
+        return True
+
+
 # receive the messages / commands from the tablet
     async def consumer(self, websocket):
         """
@@ -1212,6 +1323,12 @@ class WebsocketServer():
 
         t = cmd.get("type")
         action = cmd.get("action")
+
+        if await self.handle_service_request(
+            websocket,
+            cmd,
+        ):
+            return
 
         # ==========================================================
         # Request-specific robot configuration APIs
@@ -1871,89 +1988,94 @@ class WebsocketServer():
 
         if action == "jog":
             direction = cmd.get("dir")
+            request_id = cmd.get("req_id")
+            session_id = str(cmd.get("jog_session_id", "")).strip()
 
-            if direction not in (
-                "forward",
-                "backward",
-            ):
-                await self.responses.put({
-                    "type": "error",
-                    "id": "jog",
-                    "error": "invalid_direction",
-                    "details": f"dir={direction}",
-                })
+            if not session_id or len(session_id) > 48:
+                await self.send_error(
+                    websocket,
+                    error="invalid_jog_session",
+                    message="A valid jog_session_id is required.",
+                    request_id=request_id,
+                )
+                return
+
+            if direction not in ("forward", "backward"):
+                await self.send_error(
+                    websocket,
+                    error="invalid_direction",
+                    message=f"Unsupported jog direction: {direction}",
+                    request_id=request_id,
+                )
+                return
+
+            if not self.h7_runtime_ready.is_set():
+                await self.send_error(
+                    websocket,
+                    error="h7_runtime_not_ready",
+                    message="Jogging is unavailable until the H7 runtime is ready.",
+                    request_id=request_id,
+                )
                 return
 
             try:
-                speed = float(
-                    cmd.get(
-                        "speed",
-                        0.02,
-                    )
-                )
+                speed = float(cmd.get("speed", 0.02))
             except (TypeError, ValueError):
                 speed = 0.02
 
             try:
-                lease_ms = int(
-                    cmd.get(
-                        "lease_ms",
-                        250,
-                    )
-                )
+                lease_ms = int(cmd.get("lease_ms", 250))
             except (TypeError, ValueError):
                 lease_ms = 250
 
             try:
-                seq = int(
-                    cmd.get(
-                        "seq",
-                        0,
-                    )
-                )
+                seq = int(cmd.get("seq", 0))
             except (TypeError, ValueError):
                 seq = 0
 
-            speed = max(
-                0.0,
-                min(
-                    speed,
-                    0.02,
-                ),
-            )
+            speed = max(0.0, min(speed, 0.02))
+            lease_ms = max(1, min(lease_ms, 500))
 
-            lease_ms = max(
-                1,
-                min(
-                    lease_ms,
-                    500,
-                ),
-            )
-
+            loop = asyncio.get_running_loop()
             await self.mcu_writes.put({
                 "action": "jog",
+                "jog_session_id": session_id,
                 "dir": direction,
                 "speed": speed,
                 "lease_ms": lease_ms,
                 "seq": seq,
+                # Private CM5 metadata. SerialServer removes keys beginning with `_`
+                # before JSON encoding and drops this command if it has expired.
+                "_expires_monotonic": loop.time() + (lease_ms / 1000.0),
+                "_transient_motion": True,
             })
             return
 
         if action == "jog_stop":
-            try:
-                seq = int(
-                    cmd.get(
-                        "seq",
-                        0,
-                    )
+            request_id = cmd.get("req_id")
+            session_id = str(cmd.get("jog_session_id", "")).strip()
+
+            if not session_id or len(session_id) > 48:
+                await self.send_error(
+                    websocket,
+                    error="invalid_jog_session",
+                    message="A valid jog_session_id is required.",
+                    request_id=request_id,
                 )
+                return
+
+            try:
+                seq = int(cmd.get("seq", 0))
             except (TypeError, ValueError):
                 seq = 0
 
-            await self.mcu_writes.put({
-                "action": "jog_stop",
-                "seq": seq,
-            })
+            if self.h7_runtime_ready.is_set():
+                await self.mcu_writes.put({
+                    "action": "jog_stop",
+                    "jog_session_id": session_id,
+                    "seq": seq,
+                    "_transient_motion": True,
+                })
             return
 
         # ==========================================================
@@ -2832,39 +2954,94 @@ class WebsocketServer():
 
         return True, None
 
-    async def drain_trigger_acks(self):
+    async def drain_trigger_acks(self) -> None:
         while True:
             try:
                 self.trigger_acks.get_nowait()
             except asyncio.QueueEmpty:
                 break
 
-    async def wait_for_trigger_ack(self, expected_count: int, timeout_s: float = 1.5):
-        """
-        Wait specifically for {"status":"triggers_loaded","count": expected_count}
-        from the MCU.
-        """
+    async def wait_for_trigger_ack(
+        self,
+        expected_count: int,
+        timeout_s: float = 1.5,
+    ) -> dict:
         deadline = asyncio.get_running_loop().time() + timeout_s
 
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise asyncio.TimeoutError(
-                    f"Timed out waiting for trigger ACK count={expected_count}"
+                    "Timed out waiting for trigger load acknowledgement: "
+                    f"count={expected_count}"
                 )
 
-            msg = await asyncio.wait_for(self.trigger_acks.get(), timeout=remaining)
+            msg = await asyncio.wait_for(
+                self.trigger_acks.get(),
+                timeout=remaining,
+            )
 
             status = str(msg.get("status", "")).lower()
             count = msg.get("count")
 
+            if status == "trigger_load_failed" or msg.get("ok") is False:
+                raise RuntimeError(
+                    "H7 rejected the trigger table: "
+                    f"status={status} error={msg.get('error')} count={count}"
+                )
+
             if status == "triggers_loaded" and count == expected_count:
-                self.logger.log.debug(f"Matched trigger ACK count={count}")
+                self.logger.log.debug(
+                    f"Matched trigger load acknowledgement count={count}"
+                )
                 return msg
 
-            # Ignore stale / mismatched trigger ACKs
             self.logger.log.debug(
-                f"Ignoring unexpected trigger ACK: {msg}, expected count={expected_count}"
+                "Ignoring unexpected trigger acknowledgement: "
+                f"{msg}, expected_count={expected_count}"
+            )
+
+    async def wait_for_trigger_commit_ack(
+        self,
+        expected_count: int,
+        timeout_s: float = 3.0,
+    ) -> dict:
+        deadline = asyncio.get_running_loop().time() + timeout_s
+
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError(
+                    "Timed out waiting for trigger reconciliation: "
+                    f"count={expected_count}"
+                )
+
+            msg = await asyncio.wait_for(
+                self.trigger_acks.get(),
+                timeout=remaining,
+            )
+
+            status = str(msg.get("status", "")).lower()
+            count = msg.get("count")
+
+            if status == "trigger_load_failed" or msg.get("ok") is False:
+                raise RuntimeError(
+                    "H7 trigger reconciliation failed: "
+                    f"status={status} error={msg.get('error')} count={count}"
+                )
+
+            if status == "triggers_reconciled" and count == expected_count:
+                self.logger.log.info(
+                    "H7 trigger table committed and reconciled: "
+                    f"count={count} "
+                    f"position_mm={msg.get('position_mm')} "
+                    f"commanded_mask={msg.get('commanded_mask')}"
+                )
+                return msg
+
+            self.logger.log.debug(
+                "Ignoring non-commit trigger acknowledgement: "
+                f"{msg}, expected_count={expected_count}"
             )
 
     async def send_triggers_incrementally(
@@ -2877,15 +3054,44 @@ class WebsocketServer():
         wait_for_ack: bool = False,
         ack_timeout_s: float = 1.5,
     ) -> None:
-        triggers_list = list(triggers)
+        raw_triggers = list(triggers)
+        normalized_triggers = []
 
-        # Clear stale acks before starting a new programming sequence
+        # Validate the complete table before changing H7 state. A malformed
+        # trigger rejects the entire operation instead of loading a partial table.
+        for index, raw in enumerate(raw_triggers):
+            try:
+                trigger = self.normalize_trigger_for_mcu(
+                    raw,
+                    default_delay_s=default_delay_s,
+                )
+            except Exception as error:
+                raise ValueError(
+                    f"Invalid trigger at index {index}: {error}"
+                ) from error
+
+            valid, validation_error = self.validate_trigger_for_mcu(
+                trigger,
+                channel_count=channel_count,
+            )
+            if not valid:
+                raise ValueError(
+                    f"Invalid trigger at index {index}: {validation_error}"
+                )
+
+            normalized_triggers.append(trigger)
+
         await self.drain_trigger_acks()
 
-        # If we’re replacing the table, clear once as a standalone message.
         if clear_first:
-            await self.mcu_writes.put({"action": "set_triggers", "clear": True})
-            self.logger.log.debug("WS: set_triggers -> {'clear': True}")
+            await self.mcu_writes.put({
+                "action": "set_triggers",
+                "clear": True,
+                "begin": True,
+            })
+            self.logger.log.debug(
+                "WS: began atomic trigger-table replacement."
+            )
 
             if wait_for_ack:
                 await self.wait_for_trigger_ack(
@@ -2893,38 +3099,35 @@ class WebsocketServer():
                     timeout_s=ack_timeout_s,
                 )
 
-        if not triggers_list:
-            if clear_first:
-                self.logger.log.info("WS: set_triggers -> [clear only] (no triggers)")
-            return
-
-        for idx, raw in enumerate(triggers_list):
-            try:
-                t = self.normalize_trigger_for_mcu(raw, default_delay_s=default_delay_s)
-            except Exception as e:
-                self.logger.log.warning(f"WS: skipping invalid trigger at index {idx}: {e}")
-                continue
-
-            ok, err = self.validate_trigger_for_mcu(t, channel_count=channel_count)
-            if not ok:
-                self.logger.log.warning(
-                    f"WS: skipping invalid trigger at index {idx}: {err}; trigger={t}"
-                )
-                continue
-
-            payload = {"action": "set_triggers", "trigger": t}
+        for index, trigger in enumerate(normalized_triggers):
+            payload = {
+                "action": "set_triggers",
+                "trigger": trigger,
+            }
             await self.mcu_writes.put(payload)
-            self.logger.log.debug(f"WS: set_triggers -> {payload}")
-
-            await asyncio.sleep(0)
+            self.logger.log.debug(
+                f"WS: queued trigger {index + 1}/{len(normalized_triggers)}"
+            )
 
             if wait_for_ack:
-                expected_count = idx + 1
-
                 await self.wait_for_trigger_ack(
-                    expected_count=expected_count,
+                    expected_count=index + 1,
                     timeout_s=ack_timeout_s,
                 )
+
+        # Commit is always acknowledged, even when callers do not request an
+        # acknowledgement for every individual trigger. Apply to Robot must not
+        # report success until reconciliation is confirmed by the H7.
+        await self.mcu_writes.put({
+            "action": "set_triggers",
+            "commit": True,
+        })
+
+        await self.wait_for_trigger_commit_ack(
+            expected_count=len(normalized_triggers),
+            timeout_s=max(ack_timeout_s, 3.0),
+        )
+
 
     @staticmethod
     def validate_actor_initials(

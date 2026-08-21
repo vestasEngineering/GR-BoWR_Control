@@ -12,6 +12,7 @@ from datetime import (
 )
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from service_db import ServiceDatabaseMixin
 
 DB_FILE = Path(__file__).with_name("grlrr.db")
 
@@ -37,6 +38,7 @@ def utc_now_iso() -> str:
 class DatabaseService(
     ConfigurationDatabaseMixin,
     EncoderCheckpointDatabaseMixin,
+    ServiceDatabaseMixin,
 ):
     """
     Thread-safe SQLite service.
@@ -77,6 +79,7 @@ class DatabaseService(
         self._configure_database()
         self.create_tables()
         self.create_configuration_tables()
+        self.create_service_tables()
         self.migrate_configuration_tables()
         self._migrate_existing_database()
         self.migrate_encoder_checkpoint_columns()

@@ -105,6 +105,13 @@ class Grlrr():
             )
 
         try:
+            self.service_usage.flush()
+        except Exception:
+            self.logger.log.exception(
+                "Service usage flush failed."
+            )
+
+        try:
             self.db.close()
         except Exception:
             self.logger.log.exception(
