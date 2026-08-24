@@ -16,29 +16,19 @@ WHEEL_DIAMETER_M = 0.048
 ENCODER_CPR = 4096
 
 MODULES = [
-    # Motors (axes 0..3)
     {"id": "motor_1", "name": "Motor 1 (Axis 0)", "category": "motor", "index": 0},
     {"id": "motor_2", "name": "Motor 2 (Axis 1)", "category": "motor", "index": 1},
     {"id": "motor_3", "name": "Motor 3 (Axis 2)", "category": "motor", "index": 2},
     {"id": "motor_4", "name": "Motor 4 (Axis 3)", "category": "motor", "index": 3},
 
-    # Actuators (channels 0..3)
     {"id": "actuator_1", "name": "Actuator A (Ch 0)", "category": "actuator", "channel": 0},
     {"id": "actuator_2", "name": "Actuator B (Ch 1)", "category": "actuator", "channel": 1},
     {"id": "actuator_3", "name": "Actuator C (Ch 2)", "category": "actuator", "channel": 2},
     {"id": "actuator_4", "name": "Actuator D (Ch 3)", "category": "actuator", "channel": 3},
 
-    # Sensors
     {"id": "ultrasonic", "name": "Ultrasonic Sensor", "category": "sensor", "sensor": "ultrasonic"},
     {"id": "battery", "name": "Battery", "category": "sensor", "sensor": "battery"},
-    {"id": "jog_forward_switch",  "name": "Jog Forward Switch (D1)",  "category": "sensor", "sensor": "digital", "pin": 1,  "expect": True},
-    {"id": "jog_backward_switch", "name": "Jog Backward Switch (D10)","category": "sensor", "sensor": "digital", "pin": 10, "expect": True},
 
-
-    #Ultrasonic Servo
-    {"id": "ultrasonic_servo", "name": "Ultrasonic Servo", "category": "servo"},
-
-    # Andon
     {"id": "andon_ring", "name": "Andon Ring", "category": "andon"},
 ]
 MODULE_BY_ID = {m["id"]: m for m in MODULES}
@@ -830,6 +820,7 @@ class WebsocketServer():
                         )
 
                     elif event_type == "mcu_serial_connection_lost":
+                        self.service_runtime.transport_lost(msg)
                         self.configuration_loaded_to_mcu = False
                         self.configuration_apply_error = (
                             "MCU serial connection was lost."
@@ -2676,117 +2667,6 @@ class WebsocketServer():
                 "type": "modules",
                 "items": MODULES,
             })
-            return
-
-        if t == "test_module":
-            module_id = cmd.get("id")
-
-            if (
-                not module_id
-                or module_id not in MODULE_BY_ID
-            ):
-                await self.responses.put({
-                    "type": "error",
-                    "error": "bad_request",
-                    "details": "unknown module id",
-                    "id": module_id,
-                })
-                return
-
-            module = MODULE_BY_ID[module_id]
-            category = module["category"]
-
-            # Acknowledge immediately so the HMI can show
-            # that the test is running.
-            await self.responses.put({
-                "type": "ack",
-                "ok": True,
-                "info": "test_started",
-                "id": module_id,
-            })
-
-            if category == "motor":
-                await self.mcu_writes.put({
-                    "action": "test_motor",
-                    "id": module_id,
-                    "index": int(
-                        module.get(
-                            "index",
-                            0,
-                        )
-                    ),
-                    "speed": 0.02,
-                    "duration_ms": 600,
-                })
-
-            elif category == "actuator":
-                await self.mcu_writes.put({
-                    "action": "test_actuator",
-                    "id": module_id,
-                    "channel": int(
-                        module.get(
-                            "channel",
-                            0,
-                        )
-                    ),
-                    "voltage": 3.0,
-                    "tolerance": 0.8,
-                    "settle_ms": 100,
-                })
-
-            elif category == "sensor":
-                sensor_kind = module.get(
-                    "sensor",
-                    "ultrasonic",
-                )
-
-                payload = {
-                    "action": "test_sensor",
-                    "id": module_id,
-                    "sensor": sensor_kind,
-                }
-
-                if sensor_kind == "digital":
-                    payload["pin"] = int(
-                        module.get(
-                            "pin",
-                            1,
-                        )
-                    )
-
-                    payload["expect"] = bool(
-                        module.get(
-                            "expect",
-                            True,
-                        )
-                    )
-
-                    payload["sample_ms"] = 300
-
-                await self.mcu_writes.put(payload)
-
-            elif category == "andon":
-                await self.mcu_writes.put({
-                    "action": "test_light",
-                    "id": module_id,
-                })
-
-            elif category == "servo":
-                await self.mcu_writes.put({
-                    "action": "test_servo",
-                    "id": module_id,
-                })
-
-            else:
-                await self.responses.put({
-                    "type": "error",
-                    "error": "unsupported_module",
-                    "details": (
-                        f"category={category}"
-                    ),
-                    "id": module_id,
-                })
-
             return
 
         # ==========================================================

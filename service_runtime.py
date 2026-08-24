@@ -7,20 +7,17 @@ from uuid import uuid4
 
 
 DIAGNOSTIC_METADATA = {
-    'motor_1': ('Motor 1 test', True, 3),
-    'motor_2': ('Motor 2 test', True, 3),
-    'motor_3': ('Motor 3 test', True, 3),
-    'motor_4': ('Motor 4 test', True, 3),
+    'motor_1': ('Motor 1 test', True, 7),
+    'motor_2': ('Motor 2 test', True, 7),
+    'motor_3': ('Motor 3 test', True, 7),
+    'motor_4': ('Motor 4 test', True, 7),
     'actuator_1': ('Actuator A test', True, 4),
     'actuator_2': ('Actuator B test', True, 4),
     'actuator_3': ('Actuator C test', True, 4),
     'actuator_4': ('Actuator D test', True, 4),
     'ultrasonic': ('Ultrasonic sensor test', False, 3),
     'battery': ('Battery measurement', False, 2),
-    'jog_forward_switch': ('Forward jog switch test', False, 3),
-    'jog_backward_switch': ('Backward jog switch test', False, 3),
-    'ultrasonic_servo': ('Ultrasonic servo test', True, 5),
-    'andon_ring': ('Andon ring test', False, 12),
+    'andon_ring': ('Andon ring test', False, 3),
 }
 
 
@@ -35,6 +32,8 @@ class ServiceRuntime:
         self._lock = asyncio.Lock()
         self._active_run_id: Optional[str] = None
         self._active_module_id: Optional[str] = None
+        self._active_transaction_id: Optional[str] = None
+        self._diagnostic_timeout_task: Optional[asyncio.Task] = None
 
     @staticmethod
     def _now() -> str:
@@ -148,7 +147,8 @@ class ServiceRuntime:
             })
         return items
 
-    async def start(self, *, diagnostic_id: str, module_id: str, actor: Optional[str], server) -> Dict[str, Any]:
+    async def start(self, *, diagnostic_id: str, module_id: str,
+                    actor: Optional[str], server) -> Dict[str, Any]:
         async with self._lock:
             catalog = {item['id']: item for item in self.diagnostic_catalog(server)}
             definition = catalog.get(diagnostic_id)
@@ -156,17 +156,63 @@ class ServiceRuntime:
                 raise ValueError('Unknown diagnostic.')
             if not definition['allowed']:
                 raise RuntimeError(definition['blocking_reason'] or 'Diagnostic is blocked.')
+
             run_id = str(uuid4())
             transaction_id = f'diag-{uuid4()}'
-            run = self.db.create_diagnostic_run(
-                run_uuid=run_id, diagnostic_id=diagnostic_id, module_id=module_id,
-                requested_by=actor, transaction_id=transaction_id, session_id=None,
+            self.db.create_diagnostic_run(
+                run_uuid=run_id,
+                diagnostic_id=diagnostic_id,
+                module_id=module_id,
+                requested_by=actor,
+                transaction_id=transaction_id,
+                session_id=None,
             )
-            self.db.update_diagnostic_run(run_id, state='RUNNING', message='Diagnostic command sent to H7.')
+            self.db.update_diagnostic_run(
+                run_id,
+                state='RUNNING',
+                message='Diagnostic command sent to H7.',
+            )
+
             self._active_run_id = run_id
             self._active_module_id = module_id
-            await self.mcu_writes.put(self._command_for(module_id, run_id, transaction_id))
+            self._active_transaction_id = transaction_id
+
+            command = self._command_for(module_id, run_id, transaction_id)
+            await self.mcu_writes.put(command)
+
+            if self._diagnostic_timeout_task is not None:
+                self._diagnostic_timeout_task.cancel()
+            self._diagnostic_timeout_task = asyncio.create_task(
+                self._timeout_active_run(run_id, timeout_s=15.0),
+                name=f'diagnostic-timeout-{run_id}',
+            )
             return self.db.get_diagnostic_run(run_id)
+
+
+    async def _timeout_active_run(self, run_id: str, timeout_s: float) -> None:
+        try:
+            await asyncio.sleep(timeout_s)
+            async with self._lock:
+                if self._active_run_id != run_id:
+                    return
+                self.db.update_diagnostic_run(
+                    run_id,
+                    state='TIMED_OUT',
+                    message='The H7 did not return a terminal diagnostic result.',
+                    result={
+                        'type': 'test_result',
+                        'run_id': run_id,
+                        'id': self._active_module_id,
+                        'pass': False,
+                        'reason': 'diagnostic_result_timeout',
+                        'measurements': {},
+                    },
+                )
+                self._clear_active(run_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.logger.log.exception('Failed to time out diagnostic run.')
 
     def status(self, run_id: str) -> Dict[str, Any]:
         return self.db.get_diagnostic_run(run_id)
@@ -174,25 +220,60 @@ class ServiceRuntime:
     async def abort(self, run_id: str) -> Dict[str, Any]:
         async with self._lock:
             run = self.db.get_diagnostic_run(run_id)
-            if run['state'] in {'passed','failed','aborted','timed_out'}:
+            if run['state'] in {'passed', 'failed', 'aborted', 'timed_out'}:
                 return run
-            await self.mcu_writes.put({'action': 'abort_diagnostic', 'run_id': run_id})
-            updated = self.db.update_diagnostic_run(run_id, state='ABORTED', message='Diagnostic aborted by service operator.')
+            if run_id != self._active_run_id:
+                raise RuntimeError('Diagnostic run is not the active run.')
+            await self.mcu_writes.put({
+                'action': 'abort_diagnostic',
+                'run_id': run_id,
+                '_transient_motion': True,
+            })
+            # Record operator intent. The H7 terminal result may arrive afterward;
+            # accept_test_result ignores it because this run is already terminal.
+            updated = self.db.update_diagnostic_run(
+                run_id,
+                state='ABORTED',
+                message='Diagnostic aborted by service operator.',
+            )
             self._clear_active(run_id)
             return updated
 
     def accept_test_result(self, message: Dict[str, Any]) -> None:
         run_id = str(message.get('run_id') or '')
         module_id = str(message.get('id') or message.get('module_id') or '')
-        if not run_id and self._active_module_id == module_id:
-            run_id = self._active_run_id or ''
+        transaction_id = str(message.get('transaction_id') or '')
+
         if not run_id:
+            self.logger.log.warning('Ignoring diagnostic result without run_id.')
             return
-        passed = message.get('pass') is True
+        if run_id != self._active_run_id:
+            self.logger.log.warning('Ignoring stale diagnostic result: run_id=%s', run_id)
+            return
+        if module_id != self._active_module_id:
+            self.logger.log.warning(
+                'Ignoring diagnostic result with wrong module: expected=%s actual=%s',
+                self._active_module_id, module_id,
+            )
+            return
+        if transaction_id != self._active_transaction_id:
+            self.logger.log.warning(
+                'Ignoring diagnostic result with wrong transaction: run_id=%s', run_id,
+            )
+            return
+
         try:
+            persisted = self.db.get_diagnostic_run(run_id)
+            if persisted['state'] not in {'queued', 'running'}:
+                return
+            passed = message.get('pass') is True
             self.db.update_diagnostic_run(
-                run_id, state='PASSED' if passed else 'FAILED',
-                message='Diagnostic passed.' if passed else str(message.get('reason') or 'Diagnostic failed.'),
+                run_id,
+                state='PASSED' if passed else 'FAILED',
+                message=(
+                    'Diagnostic passed.' if passed
+                    else str(message.get('reason') or 'Diagnostic failed.')
+                ),
                 result=dict(message),
             )
             self._clear_active(run_id)
@@ -200,33 +281,86 @@ class ServiceRuntime:
             self.logger.log.exception('Failed to persist diagnostic result.')
 
     def _clear_active(self, run_id: str) -> None:
-        if self._active_run_id == run_id:
-            self._active_run_id = None
-            self._active_module_id = None
+        if self._active_run_id != run_id:
+            return
+        self._active_run_id = None
+        self._active_module_id = None
+        self._active_transaction_id = None
+        task = self._diagnostic_timeout_task
+        self._diagnostic_timeout_task = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
 
-    def _command_for(self, module_id: str, run_id: str, transaction_id: str) -> Dict[str, Any]:
+    def transport_lost(self, message: Optional[Dict[str, Any]] = None) -> None:
+        run_id = self._active_run_id
+        if not run_id:
+            return
+        try:
+            self.db.update_diagnostic_run(
+                run_id,
+                state='FAILED',
+                message='MCU serial connection was lost during the diagnostic.',
+                result={
+                    'type': 'test_result',
+                    'id': self._active_module_id,
+                    'run_id': run_id,
+                    'transaction_id': self._active_transaction_id,
+                    'pass': False,
+                    'reason': 'mcu_connection_lost',
+                    'measurements': {'transport_event': dict(message or {})},
+                },
+            )
+        finally:
+            self._clear_active(run_id)
+
+    def _command_for(self, module_id: str, run_id: str,
+                    transaction_id: str) -> Dict[str, Any]:
         module = next((item for item in self.modules if item.get('id') == module_id), None)
         if module is None:
             raise ValueError('Unknown diagnostic module.')
+
         category = module.get('category')
-        common = {'id': module_id, 'run_id': run_id, 'transaction_id': transaction_id}
+        common = {
+            'id': module_id,
+            'run_id': run_id,
+            'transaction_id': transaction_id,
+        }
+
         if category == 'motor':
-            return {**common, 'action': 'test_motor', 'index': int(module.get('index', 0)),
-                    'speed': 0.02, 'duration_ms': 600}
+            loop = asyncio.get_running_loop()
+            return {
+                **common,
+                'action': 'test_motor',
+                'index': int(module.get('index', 0)),
+                'speed': 0.02,
+                'duration_ms': 600,
+                '_transient_motion': True,
+                '_expires_monotonic': loop.time() + 2.0,
+            }
+
         if category == 'actuator':
-            return {**common, 'action': 'test_actuator', 'channel': int(module.get('channel', 0)),
-                    'voltage': 3.0, 'tolerance': 0.8, 'settle_ms': 100}
+            return {
+                **common,
+                'action': 'test_actuator',
+                'channel': int(module.get('channel', 0)),
+                'voltage': 3.0,
+                'tolerance': 0.8,
+                'settle_ms': 100,
+            }
+
         if category == 'sensor':
-            payload = {**common, 'action': 'test_sensor',
-                       'sensor': module.get('sensor', 'ultrasonic')}
-            if module.get('sensor') == 'digital':
-                payload.update({'pin': int(module.get('pin', 1)),
-                                'expect': bool(module.get('expect', True)), 'sample_ms': 300})
-            return payload
-        if category == 'servo':
-            return {**common, 'action': 'test_servo'}
+            return {
+                **common,
+                'action': 'test_sensor',
+                'sensor': module.get('sensor', 'ultrasonic'),
+            }
+
         if category == 'andon':
-            return {**common, 'action': 'test_light'}
+            return {
+                **common,
+                'action': 'test_andon',
+            }
+
         raise ValueError(f'Unsupported diagnostic category: {category}')
 
     @staticmethod
