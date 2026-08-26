@@ -17,7 +17,8 @@ DIAGNOSTIC_METADATA = {
     'actuator_4': ('Actuator D test', True, 4),
     'ultrasonic': ('Ultrasonic sensor test', False, 3),
     'battery': ('Battery measurement', False, 2),
-    'andon_ring': ('Andon ring test', False, 3),
+    'andon_ring': ('Andon ring test', False, 250),
+    'clamp_sensor': ('Clamp sensor test', False, 60),
 }
 
 
@@ -322,6 +323,42 @@ class ServiceRuntime:
                 'module_id': module_id,
                 'confirmed': bool(confirmed),
             }
+
+    async def confirm_clamp_state(self, *, run_id: str, module_id: str,
+                                expected_clamped: bool):
+        async with self._lock:
+            if run_id != self._active_run_id or module_id != self._active_module_id:
+                raise RuntimeError('Clamp confirmation does not match the active run.')
+            if self._active_operation != 'diagnostic' or module_id != 'clamp_sensor':
+                raise RuntimeError('The active operation is not the clamp diagnostic.')
+            await self.mcu_writes.put({
+                'action': 'confirm_clamp_state', 'run_id': run_id,
+                'transaction_id': self._active_transaction_id, 'id': module_id,
+                'expected_clamped': bool(expected_clamped), '_transient_motion': True,
+            })
+            return {'type': 'clamp_state_confirmation', 'ok': True,
+                    'run_id': run_id, 'module_id': module_id,
+                    'expected_clamped': bool(expected_clamped)}
+
+    async def confirm_andon_color(self, *, run_id: str, module_id: str,
+                                color: str, confirmed: bool):
+        normalized = color.strip().upper()
+        if normalized not in {'GREEN', 'YELLOW', 'BLUE', 'RED'}:
+            raise ValueError('Unsupported Andon color confirmation.')
+        async with self._lock:
+            if run_id != self._active_run_id or module_id != self._active_module_id:
+                raise RuntimeError('Andon confirmation does not match the active run.')
+            if self._active_operation != 'diagnostic' or module_id != 'andon_ring':
+                raise RuntimeError('The active operation is not the Andon diagnostic.')
+            await self.mcu_writes.put({
+                'action': 'confirm_andon_color', 'run_id': run_id,
+                'transaction_id': self._active_transaction_id, 'id': module_id,
+                'color': normalized, 'confirmed': bool(confirmed),
+                '_transient_motion': True,
+            })
+            return {'type': 'andon_color_confirmation', 'ok': True,
+                    'run_id': run_id, 'module_id': module_id,
+                    'color': normalized, 'confirmed': bool(confirmed)}
 
     async def _timeout_active_run(self, run_id: str, timeout_s: float) -> None:
         try:

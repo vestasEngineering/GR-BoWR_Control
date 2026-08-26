@@ -7,6 +7,7 @@ from websockets.server import serve
 from service_runtime import ServiceRuntime
 from configuration_manager import ConfigurationManager
 from encoder_persistence import (EncoderPersistenceCoordinator, EncoderRecoveryState)
+from diagnostic_plan_runtime import DiagnosticPlanRuntime
 from health import HealthModel
 from logger import Logger
 from queues import Queues
@@ -30,6 +31,7 @@ MODULES = [
     {"id": "battery", "name": "Battery", "category": "sensor", "sensor": "battery"},
 
     {"id": "andon_ring", "name": "Andon Ring", "category": "andon"},
+    {"id": "clamp_sensor", "name": "Clamp Sensor", "category": "sensor", "sensor": "clamp"},
 ]
 MODULE_BY_ID = {m["id"]: m for m in MODULES}
 
@@ -65,6 +67,11 @@ class WebsocketServer():
             db=job_manager.db,
             mcu_writes=self.mcu_writes,
             modules=MODULES,
+            logger=self.logger,
+        )
+
+        self.diagnostic_plan_runtime = DiagnosticPlanRuntime(
+            service_runtime=self.service_runtime,
             logger=self.logger,
         )
 
@@ -176,6 +183,8 @@ class WebsocketServer():
                 *tasks,
                 return_exceptions=True,
             )
+
+            await self.diagnostic_plan_runtime.shutdown()
 
     async def apply_persisted_configuration(
         self,
@@ -1182,6 +1191,11 @@ class WebsocketServer():
             "confirm_actuator_extension",
             "get_diagnostic_status",
             "abort_diagnostic",
+            "confirm_clamp_state",
+            "confirm_andon_color",
+            "start_diagnostic_plan",
+            "get_diagnostic_plan_status",
+            "abort_diagnostic_plan",
         }
         if request_type not in service_types:
             return False
@@ -1215,6 +1229,10 @@ class WebsocketServer():
                 payload = {"type": "service_events", "ok": True, **result}
 
             elif request_type == "start_diagnostic":
+                if self.diagnostic_plan_runtime.active:
+                    raise RuntimeError(
+                        "Individual diagnostics are unavailable while the full system check is running."
+                    )
                 run = await self.service_runtime.start(
                     diagnostic_id=str(cmd.get("diagnostic_id", "")),
                     module_id=str(cmd.get("module_id", "")),
@@ -1239,32 +1257,106 @@ class WebsocketServer():
                     confirmed=cmd.get("confirmed") is True,
                 )
 
+            elif request_type == "confirm_clamp_state":
+                payload = await self.service_runtime.confirm_clamp_state(
+                    run_id=str(cmd.get("run_id", "")),
+                    module_id=str(cmd.get("module_id", "")),
+                    expected_clamped=cmd.get("expected_clamped") is True,
+                )
+            elif request_type == "confirm_andon_color":
+                payload = await self.service_runtime.confirm_andon_color(
+                    run_id=str(cmd.get("run_id", "")),
+                    module_id=str(cmd.get("module_id", "")),
+                    color=str(cmd.get("color", "")),
+                    confirmed=cmd.get("confirmed") is True,
+                )
+
+            elif request_type == "start_diagnostic_plan":
+                plan = await self.diagnostic_plan_runtime.start(
+                    policy=str(cmd.get("policy", "continue_independent_tests")),
+                    actor=None,
+                    server=self,
+                )
+                payload = {
+                    "type": "diagnostic_plan_started",
+                    "ok": True,
+                    "plan": plan,
+                }
+
+            elif request_type == "get_diagnostic_plan_status":
+                plan = self.diagnostic_plan_runtime.snapshot(
+                    str(cmd.get("plan_id", ""))
+                )
+                payload = {
+                    "type": "diagnostic_plan_status",
+                    "ok": True,
+                    "plan": plan,
+                }
+
+            elif request_type == "abort_diagnostic_plan":
+                plan = await self.diagnostic_plan_runtime.abort(
+                    str(cmd.get("plan_id", ""))
+                )
+                payload = {
+                    "type": "diagnostic_plan_aborted",
+                    "ok": True,
+                    "plan": plan,
+                }
+
             elif request_type == "get_diagnostic_status":
                 run = self.service_runtime.status(str(cmd.get("run_id", "")))
                 payload = {"type": "diagnostic_status", "ok": True, "run": run}
 
+            elif request_type == "abort_diagnostic":
+                run = await self.service_runtime.abort(
+                    str(cmd.get("run_id", ""))
+                )
+
+                payload = {
+                    "type": "diagnostic_aborted",
+                    "ok": True,
+                    "run": run,
+                }
+
             else:
-                run = await self.service_runtime.abort(str(cmd.get("run_id", "")))
-                payload = {"type": "diagnostic_aborted", "ok": True, "run": run}
+                raise ValueError(
+                    "Unsupported service request."
+                )
 
-            await self.send_response(websocket, payload, request_id=request_id)
+            await self.send_response(
+                websocket,
+                payload,
+                request_id=request_id,
+            )
 
-        except (TypeError, ValueError, RuntimeError) as error:
+        except (
+            TypeError,
+            ValueError,
+            RuntimeError,
+        ) as error:
             await self.send_error(
                 websocket,
                 error="service_request_rejected",
                 message=str(error),
                 request_id=request_id,
             )
+
         except Exception as error:
-            self.logger.log.exception("Service request failed.")
+            self.logger.log.exception(
+                "Service request failed."
+            )
+
             await self.send_error(
                 websocket,
                 error="service_request_failed",
-                message="The service request could not be completed.",
+                message=(
+                    "The service request could "
+                    "not be completed."
+                ),
                 details=str(error),
                 request_id=request_id,
             )
+
         return True
 
 
@@ -2748,6 +2840,15 @@ class WebsocketServer():
 
         # Preserve the existing behavior for commands handled by
         # another application component.
+        if cmd.get("req_id") is not None:
+            await self.send_error(
+                websocket,
+                error="unsupported_request",
+                message=f"Unsupported request type: {t or action or 'unknown'}",
+                request_id=cmd.get("req_id"),
+            )
+            return
+
         await self.commands.put(cmd)
 
 
