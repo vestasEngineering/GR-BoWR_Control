@@ -37,6 +37,7 @@ class SerialServer:
         self.heartbeat_task: Optional[asyncio.Task] = None
         self._stopping = False
         self._last_tx = 0.0
+        self._last_actuator_status = None
 
         # RX rolling buffer for brace-balanced extraction (B)
         self._rx_buf: str = ""
@@ -455,10 +456,29 @@ class SerialServer:
                 self.logger.log.info(f"PI TX: {wire_msg}")
 
                 try:
-                    raw = self._encode_line(wire_msg)
-                    self.mcu.write(raw)
-                    self.mcu.flush()
-                    self._last_tx = asyncio.get_running_loop().time()
+                    raw = self._encode_line(
+                        wire_msg
+                    )
+
+                    self.logger.log.info(
+                        "PI TX: "
+                        f"bytes={len(raw)} "
+                        f"action={wire_msg.get('action')} "
+                        f"run_id={wire_msg.get('run_id')} "
+                        f"transaction_id="
+                        f"{wire_msg.get('transaction_id')} "
+                        f"payload={wire_msg}"
+                    )
+
+                    await self._write_serial_frame(
+                        raw,
+                        chunk_size=64,
+                        inter_chunk_delay_s=0.003,
+                    )
+
+                    self._last_tx = (
+                        asyncio.get_running_loop().time()
+                    )
 
                 except (serial.SerialException, serial.SerialTimeoutException) as error:
                     self.logger.log.error(
@@ -605,8 +625,10 @@ class SerialServer:
                         if msg_dict.get("type") not in (
                             "encoder",
                             "ultrasonic_dbg",
+                            "actuator_status",
+                            "hmi_connection_status",
                         ):
-                            self.logger.log.info(
+                            self.logger.log.debug(
                                 "MCU RX: "
                                 f"{json.dumps(msg_dict, separators=(',', ':'))}"
                             )
@@ -633,6 +655,24 @@ class SerialServer:
 
                     elif msg_dict.get('status', '').lower() == "light_updated":
                         self.logger.log.info(f"Andon light updated to: {msg_dict.get('state')}")
+
+                    elif msg_dict.get("type") == "serial_rx_error":
+                        self.logger.log.error(
+                            "H7 serial receive error: "
+                            f"error={msg_dict.get('error')} "
+                            f"code={msg_dict.get('code')} "
+                            f"input_length="
+                            f"{msg_dict.get('input_length')} "
+                            f"buffer_capacity="
+                            f"{msg_dict.get('buffer_capacity')} "
+                            f"json_capacity="
+                            f"{msg_dict.get('json_capacity')} "
+                            f"ts_ms={msg_dict.get('ts_ms')}"
+                        )
+
+                        await self.mcu_reads.put(
+                            msg_dict
+                        )
 
                     elif msg_dict.get("status", "").lower() in (
                         "triggers_loaded",
@@ -740,14 +780,24 @@ class SerialServer:
                     # SSv Glue Card / actuator telemetry
                     # ------------------------------------------------------
                     elif msg_dict.get("type") == "actuator_status":
-                        self.logger.log.info(
-                            "Actuator status: "
-                            f"commanded_mask={msg_dict.get('commanded_mask')} "
-                            f"feedback_mask={msg_dict.get('feedback_mask')} "
-                            f"jam_mask={msg_dict.get('jam_mask')} "
-                            f"pcb_fault={msg_dict.get('pcb_fault')} "
-                            f"ts_ms={msg_dict.get('ts_ms')}"
+
+                        status_key = (
+                            msg_dict.get("commanded_mask"),
+                            msg_dict.get("feedback_mask"),
+                            msg_dict.get("jam_mask"),
+                            msg_dict.get("pcb_fault"),
                         )
+
+                        if status_key != self._last_actuator_status:
+                            self._last_actuator_status = status_key
+
+                            self.logger.log.info(
+                                "Actuator state changed: "
+                                f"commanded_mask={msg_dict.get('commanded_mask')} "
+                                f"feedback_mask={msg_dict.get('feedback_mask')} "
+                                f"jam_mask={msg_dict.get('jam_mask')} "
+                                f"pcb_fault={msg_dict.get('pcb_fault')}"
+                            )
 
                         await self.mcu_reads.put(msg_dict)
 
@@ -840,3 +890,77 @@ class SerialServer:
         await self.mcu_writes.put({
             "action": "get_firmware_features",
         })
+
+    async def _write_serial_frame(
+        self,
+        raw: bytes,
+        *,
+        chunk_size: int = 64,
+        inter_chunk_delay_s: float = 0.003,
+    ) -> None:
+        """
+        Write one newline-delimited JSON frame in bounded chunks.
+
+        This prevents a long one-shot Linux UART write from overrunning the
+        Portenta H7's lower-level UART receive buffering before the firmware
+        main loop can drain it.
+
+        The logical frame is not retried or duplicated. The newline remains
+        exclusively at the end of the original encoded frame.
+        """
+        mcu = self.mcu
+
+        if (
+            mcu is None
+            or not getattr(
+                mcu,
+                "is_open",
+                False,
+            )
+        ):
+            raise serial.SerialException(
+                "Serial port is not open."
+            )
+
+        if chunk_size <= 0:
+            raise ValueError(
+                "chunk_size must be greater than zero."
+            )
+
+        if inter_chunk_delay_s < 0:
+            raise ValueError(
+                "inter_chunk_delay_s cannot be negative."
+            )
+
+        frame_length = len(raw)
+
+        for offset in range(
+            0,
+            frame_length,
+            chunk_size,
+        ):
+            chunk = raw[
+                offset:
+                offset + chunk_size
+            ]
+
+            written = mcu.write(chunk)
+
+            if written != len(chunk):
+                raise serial.SerialTimeoutException(
+                    "Incomplete serial frame write: "
+                    f"frame_length={frame_length} "
+                    f"offset={offset} "
+                    f"expected={len(chunk)} "
+                    f"written={written}"
+                )
+
+            if (
+                offset + len(chunk)
+                < frame_length
+            ):
+                await asyncio.sleep(
+                    inter_chunk_delay_s
+                )
+
+        mcu.flush()

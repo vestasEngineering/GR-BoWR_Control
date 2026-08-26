@@ -661,16 +661,45 @@ class WebsocketServer():
         while True:
             msg = await self.mcu_reads.get()
             try:
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("type") == "diagnostic_progress"
+                ):
+                    self.logger.log.info(
+                        "Forwarding diagnostic progress to HMI: "
+                        f"run_id={msg.get('run_id')} "
+                        f"transaction_id={msg.get('transaction_id')} "
+                        f"module_id={msg.get('id')} "
+                        f"category={msg.get('category')} "
+                        f"phase={msg.get('phase')} "
+                        f"channel={msg.get('channel')} "
+                        f"confirmation_timeout_ms="
+                        f"{msg.get('confirmation_timeout_ms')}"
+                    )
+
+                    await self.responses.put(msg)
+                    continue
                 # 1) Pass-through module test results
                 if (
                     isinstance(msg, dict)
                     and msg.get("type") == "test_result"
                 ):
-                    self.service_runtime.accept_test_result(msg)
-                    
-                    await self.publish_hmi_connection_state()
-                    await self.responses.put(msg)
+                    self.logger.log.info(
+                        "Diagnostic terminal result received: "
+                        f"run_id={msg.get('run_id')} "
+                        f"transaction_id={msg.get('transaction_id')} "
+                        f"module_id="
+                        f"{msg.get('id') or msg.get('module_id')} "
+                        f"category={msg.get('category')} "
+                        f"pass={msg.get('pass')} "
+                        f"reason={msg.get('reason')}"
+                    )
 
+                    self.service_runtime.accept_test_result(
+                        msg
+                    )
+
+                    await self.responses.put(msg)
                     continue
 
                 if isinstance(msg, dict) and msg.get("type") == "encoder_session":
@@ -850,21 +879,6 @@ class WebsocketServer():
                 ):
                     self.latest_actuator_status = (
                         dict(msg)
-                    )
-
-                    self.logger.log.info(
-                        "Forwarding actuator status "
-                        "to HMI: "
-                        f"commanded_mask="
-                        f"{msg.get('commanded_mask')} "
-                        f"feedback_mask="
-                        f"{msg.get('feedback_mask')} "
-                        f"jam_mask="
-                        f"{msg.get('jam_mask')} "
-                        f"pcb_fault="
-                        f"{msg.get('pcb_fault')} "
-                        f"ts_ms="
-                        f"{msg.get('ts_ms')}"
                     )
 
                     if self.job_manager:
@@ -1164,6 +1178,8 @@ class WebsocketServer():
             "get_diagnostic_catalog",
             "get_service_events",
             "start_diagnostic",
+            "calibrate_actuator",
+            "confirm_actuator_extension",
             "get_diagnostic_status",
             "abort_diagnostic",
         }
@@ -1206,6 +1222,22 @@ class WebsocketServer():
                     server=self,
                 )
                 payload = {"type": "diagnostic_started", "ok": True, "run": run}
+
+            elif request_type == "calibrate_actuator":
+                actor = self.validate_actor_initials(cmd)
+                run = await self.service_runtime.start_actuator_calibration(
+                    module_id=str(cmd.get("module_id", "")),
+                    actor=actor,
+                    server=self,
+                )
+                payload = {"type": "actuator_calibration_started", "ok": True, "run": run}
+
+            elif request_type == "confirm_actuator_extension":
+                payload = await self.service_runtime.confirm_actuator_extension(
+                    run_id=str(cmd.get("run_id", "")),
+                    module_id=str(cmd.get("module_id", "")),
+                    confirmed=cmd.get("confirmed") is True,
+                )
 
             elif request_type == "get_diagnostic_status":
                 run = self.service_runtime.status(str(cmd.get("run_id", "")))
@@ -1304,13 +1336,16 @@ class WebsocketServer():
             return
 
         # cmd has now been parsed and confirmed to be a dictionary.
-        self.logger.log.info(
-            "HMI request: "
-            f"type={cmd.get('type')} "
-            f"action={cmd.get('action')} "
-            f"req_id={cmd.get('req_id')} "
-            f"actor_initials={cmd.get('actor_initials')}"
-        )
+        if cmd.get("type") != "ping":
+            self.logger.log.info(
+                "HMI request: "
+                f"type={cmd.get('type')} "
+                f"action={cmd.get('action')} "
+                f"req_id={cmd.get('req_id')} "
+                f"actor_initials={cmd.get('actor_initials')}"
+            )
+        else:
+            self.logger.log.debug("HMI ping")
 
         t = cmd.get("type")
         action = cmd.get("action")
@@ -1565,6 +1600,44 @@ class WebsocketServer():
                     error=(
                         "create_blade_type_failed"
                     ),
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            return
+
+        if t == "set_motor_direction":
+            request_id = cmd.get("req_id")
+
+            try:
+                directions = dict(
+                    cmd.get("directions") or {}
+                )
+
+                self.config_manager.save_motor_direction(
+                    directions
+                )
+
+                await self.apply_motor_direction_to_mcu()
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "ack",
+                        "ok": True,
+                        "info": "motor_direction_saved",
+                    },
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Failed to save motor direction."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error="set_motor_direction_failed",
                     message=str(error),
                     request_id=request_id,
                 )
@@ -2742,24 +2815,19 @@ class WebsocketServer():
         return None
 
     def get_motor_direction(self) -> Dict[str, int]:
-        md = self.robot_data.get("motor_direction", {
-            "motor_1": 1,
-            "motor_2": -1,
-            "motor_3": -1,
-            "motor_4": 1,
-        })
+        catalog = self.config_manager.catalog()
 
-        clean = {}
-        for key, default in {
-            "motor_1": 1,
-            "motor_2": -1,
-            "motor_3": -1,
-            "motor_4": 1,
-        }.items():
-            val = md.get(key, default)
-            clean[key] = -1 if int(val) < 0 else 1
+        raw = catalog.get(
+            "motor_direction",
+            {},
+        )
 
-        return clean
+        return {
+            "motor_1": int(raw.get("motor_1", 1)),
+            "motor_2": int(raw.get("motor_2", -1)),
+            "motor_3": int(raw.get("motor_3", -1)),
+            "motor_4": int(raw.get("motor_4", 1)),
+        }
 
 
     async def apply_motor_direction_to_mcu(self):
@@ -2884,44 +2952,102 @@ class WebsocketServer():
     async def wait_for_trigger_commit_ack(
         self,
         expected_count: int,
-        timeout_s: float = 3.0,
+        timeout_s: float = 5.0,
     ) -> dict:
-        deadline = asyncio.get_running_loop().time() + timeout_s
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
 
         while True:
-            remaining = deadline - asyncio.get_running_loop().time()
+            remaining = deadline - loop.time()
+
             if remaining <= 0:
+                self.logger.log.error(
+                    "Timed out waiting for H7 trigger reconciliation: "
+                    f"expected_count={expected_count}, "
+                    f"h7_runtime_ready={self.h7_runtime_ready.is_set()}, "
+                    f"mcu_ready={self.mcu_ready.is_set()}, "
+                    f"configuration_loaded="
+                    f"{self.configuration_loaded_to_mcu}"
+                )
+
                 raise asyncio.TimeoutError(
-                    "Timed out waiting for trigger reconciliation: "
+                    "Timed out waiting for H7 trigger reconciliation: "
                     f"count={expected_count}"
                 )
 
-            msg = await asyncio.wait_for(
-                self.trigger_acks.get(),
-                timeout=remaining,
-            )
+            try:
+                msg = await asyncio.wait_for(
+                    self.trigger_acks.get(),
+                    timeout=remaining,
+                )
+            except asyncio.TimeoutError:
+                self.logger.log.error(
+                    "No trigger commit acknowledgement was received "
+                    "before the deadline: "
+                    f"expected_count={expected_count}, "
+                    f"timeout_s={timeout_s}, "
+                    f"h7_runtime_ready="
+                    f"{self.h7_runtime_ready.is_set()}, "
+                    f"mcu_ready={self.mcu_ready.is_set()}"
+                )
+                raise
 
-            status = str(msg.get("status", "")).lower()
+            if not isinstance(msg, dict):
+                self.logger.log.warning(
+                    "Ignoring non-dictionary trigger acknowledgement: "
+                    f"value={msg!r}, "
+                    f"expected_count={expected_count}"
+                )
+                continue
+
+            status = str(
+                msg.get("status", "")
+            ).strip().lower()
+
             count = msg.get("count")
 
-            if status == "trigger_load_failed" or msg.get("ok") is False:
+            self.logger.log.debug(
+                "Trigger commit acknowledgement candidate: "
+                f"status={status}, "
+                f"ok={msg.get('ok')}, "
+                f"count={count}, "
+                f"expected_count={expected_count}, "
+                f"error={msg.get('error')}"
+            )
+
+            if (
+                status == "trigger_load_failed"
+                or msg.get("ok") is False
+            ):
                 raise RuntimeError(
                     "H7 trigger reconciliation failed: "
-                    f"status={status} error={msg.get('error')} count={count}"
+                    f"status={status}, "
+                    f"error={msg.get('error')}, "
+                    f"count={count}, "
+                    f"expected_count={expected_count}"
                 )
 
-            if status == "triggers_reconciled" and count == expected_count:
+            if (
+                status == "triggers_reconciled"
+                and count == expected_count
+                and msg.get("ok") is True
+            ):
                 self.logger.log.info(
                     "H7 trigger table committed and reconciled: "
-                    f"count={count} "
-                    f"position_mm={msg.get('position_mm')} "
-                    f"commanded_mask={msg.get('commanded_mask')}"
+                    f"count={count}, "
+                    f"position_mm={msg.get('position_mm')}, "
+                    f"reached_count={msg.get('reached_count')}, "
+                    f"pending_count={msg.get('pending_count')}, "
+                    f"commanded_mask={msg.get('commanded_mask')}, "
+                    f"feedback_mask={msg.get('feedback_mask')}, "
+                    f"pcb_fault={msg.get('pcb_fault')}"
                 )
                 return msg
 
-            self.logger.log.debug(
-                "Ignoring non-commit trigger acknowledgement: "
-                f"{msg}, expected_count={expected_count}"
+            self.logger.log.warning(
+                "Ignoring unmatched trigger commit acknowledgement: "
+                f"message={msg!r}, "
+                f"expected_count={expected_count}"
             )
 
     async def send_triggers_incrementally(

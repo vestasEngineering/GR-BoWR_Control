@@ -2,6 +2,7 @@
 from __future__ import annotations
 from configuration_db import ConfigurationDatabaseMixin
 from encoder_checkpoint_db import (EncoderCheckpointDatabaseMixin,)
+from actuator_calibration_db import ActuatorCalibrationDatabaseMixin
 import json
 import sqlite3
 import threading
@@ -39,6 +40,7 @@ class DatabaseService(
     ConfigurationDatabaseMixin,
     EncoderCheckpointDatabaseMixin,
     ServiceDatabaseMixin,
+    ActuatorCalibrationDatabaseMixin,
 ):
     """
     Thread-safe SQLite service.
@@ -80,6 +82,7 @@ class DatabaseService(
         self.create_tables()
         self.create_configuration_tables()
         self.create_service_tables()
+        self.create_actuator_calibration_tables()
         self.migrate_configuration_tables()
         self._migrate_existing_database()
         self.migrate_encoder_checkpoint_columns()

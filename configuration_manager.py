@@ -138,3 +138,11 @@ class ConfigurationManager:
             blade_id,
             actor,
         )
+        
+    def save_motor_direction(
+        self,
+        directions: Dict[str, int],
+    ) -> None:
+        self.db.save_configuration_state(
+            motor_direction=directions,
+        )

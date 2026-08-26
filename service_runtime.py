@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import math
 import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -34,6 +34,8 @@ class ServiceRuntime:
         self._active_module_id: Optional[str] = None
         self._active_transaction_id: Optional[str] = None
         self._diagnostic_timeout_task: Optional[asyncio.Task] = None
+        self._active_operation = None
+        self._active_actor = None
 
     @staticmethod
     def _now() -> str:
@@ -86,38 +88,105 @@ class ServiceRuntime:
         }
 
     def module_items(self, server) -> List[Dict[str, Any]]:
-        health_faults = set((server.latest_health or {}).get('fault_modules') or [])
+        health_faults = set(
+            (server.latest_health or {}).get('fault_modules') or []
+        )
         actuator = server.latest_actuator_status or {}
         items = []
+
         for module in self.modules:
             module_id = str(module['id'])
             latest = self.db.get_latest_diagnostic_for_module(module_id)
+
             state = 'faulted' if module_id in health_faults else 'healthy'
             summary = 'No active fault is reported.'
             measurements = []
+            calibration_payload = None
+
             if module_id == 'battery':
                 pct = self._battery_percent(server)
                 if pct is not None:
-                    measurements.append({'name': 'Charge', 'value': round(pct, 1), 'unit': '%',
-                                         'within_range': pct > 15})
+                    measurements.append({
+                        'name': 'Charge',
+                        'value': round(pct, 1),
+                        'unit': '%',
+                        'within_range': pct > 15,
+                    })
+
             if module.get('category') == 'actuator':
                 channel = int(module.get('channel', 0))
-                jam = bool(int(actuator.get('jam_mask') or 0) & (1 << channel))
-                feedback = bool(int(actuator.get('feedback_mask') or 0) & (1 << channel))
+
+                jam = bool(
+                    int(actuator.get('jam_mask') or 0) & (1 << channel)
+                )
+                feedback = bool(
+                    int(actuator.get('feedback_mask') or 0) & (1 << channel)
+                )
+
                 measurements.extend([
-                    {'name': 'Feedback', 'value': 'Active' if feedback else 'Inactive'},
-                    {'name': 'Jammed', 'value': 'Yes' if jam else 'No', 'within_range': not jam},
+                    {
+                        'name': 'Feedback',
+                        'value': 'Active' if feedback else 'Inactive',
+                    },
+                    {
+                        'name': 'Jammed',
+                        'value': 'Yes' if jam else 'No',
+                        'within_range': not jam,
+                    },
                 ])
+
                 if jam or actuator.get('pcb_fault') is True:
-                    state, summary = 'faulted', 'Actuator feedback reports a jam or PCB fault.'
-            name, may_move, _ = DIAGNOSTIC_METADATA.get(module_id, (str(module.get('name')), False, 0))
+                    state = 'faulted'
+                    summary = (
+                        'Actuator feedback reports a jam or PCB fault.'
+                    )
+
+                calibration = self.db.get_actuator_calibration(channel)
+                if calibration is not None:
+                    calibration_payload = {
+                        'valid': True,
+                        'channel': channel,
+                        'extended_feedback_v': (
+                            calibration['extended_feedback_v']
+                        ),
+                        'retracted_feedback_v': (
+                            calibration['retracted_feedback_v']
+                        ),
+                        'extended_tolerance_v': (
+                            calibration['extended_tolerance_v']
+                        ),
+                        'retracted_tolerance_v': (
+                            calibration['retracted_tolerance_v']
+                        ),
+                        'extension_time_ms': (
+                            calibration['extension_time_ms']
+                        ),
+                        'retraction_time_ms': (
+                            calibration['retraction_time_ms']
+                        ),
+                        'calibrated_at': calibration['calibrated_at'],
+                        'calibrated_by': calibration['calibrated_by'],
+                    }
+
+            name, may_move, _ = DIAGNOSTIC_METADATA.get(
+                module_id,
+                (str(module.get('name')), False, 0),
+            )
+
             items.append({
-                **module, 'state': state, 'telemetry_fresh': True,
+                **module,
+                'channel': module.get('channel'),
+                'calibration': calibration_payload,
+                'state': state,
+                'telemetry_fresh': True,
                 'test_available': module_id in DIAGNOSTIC_METADATA,
-                'may_move_hardware': may_move, 'summary': summary,
-                'last_updated_at': self._now(), 'measurements': measurements,
+                'may_move_hardware': may_move,
+                'summary': summary,
+                'last_updated_at': self._now(),
+                'measurements': measurements,
                 'last_test': latest,
             })
+
         return items
 
     def diagnostic_catalog(self, server) -> List[Dict[str, Any]]:
@@ -176,25 +245,104 @@ class ServiceRuntime:
             self._active_run_id = run_id
             self._active_module_id = module_id
             self._active_transaction_id = transaction_id
+            self._active_operation = 'diagnostic'
+            self._active_actor = actor
 
             command = self._command_for(module_id, run_id, transaction_id)
             await self.mcu_writes.put(command)
 
             if self._diagnostic_timeout_task is not None:
                 self._diagnostic_timeout_task.cancel()
+
+            timeout_s = 40.0 if module_id.startswith('actuator_') else 15.0
+
             self._diagnostic_timeout_task = asyncio.create_task(
-                self._timeout_active_run(run_id, timeout_s=15.0),
+                self._timeout_active_run(run_id, timeout_s=timeout_s),
                 name=f'diagnostic-timeout-{run_id}',
             )
             return self.db.get_diagnostic_run(run_id)
 
+    async def start_actuator_calibration(self, *, module_id: str, actor: str, server) -> Dict[str, Any]:
+        async with self._lock:
+            if self._active_run_id is not None:
+                raise RuntimeError('Another diagnostic or calibration is running.')
+            process_state = str((server.latest_process_status or {}).get('state') or 'unknown').lower()
+            if not server.h7_runtime_ready.is_set() or process_state not in {'stopped','inactive','idle'}:
+                raise RuntimeError('H7 must be ready and the process confirmed stopped.')
+            module = next((m for m in self.modules if m.get('id') == module_id and m.get('category') == 'actuator'), None)
+            if module is None:
+                raise ValueError('Unknown actuator module.')
+            run_id, transaction_id = str(uuid4()), f'cal-{uuid4()}'
+            self.db.create_diagnostic_run(run_uuid=run_id, diagnostic_id=f'calibrate:{module_id}',
+                module_id=module_id, requested_by=actor, transaction_id=transaction_id, session_id=None)
+            self.db.update_diagnostic_run(run_id, state='RUNNING', message='Install calibration command sent to H7.')
+            self._active_run_id, self._active_module_id = run_id, module_id
+            self._active_transaction_id, self._active_operation, self._active_actor = transaction_id, 'calibration', actor
+            loop = asyncio.get_running_loop()
+            await self.mcu_writes.put({'action':'calibrate_actuator','id':module_id,'channel':int(module['channel']),
+                'run_id':run_id,'transaction_id':transaction_id,'extend_voltage':3.0,
+                '_transient_motion':True,'_expires_monotonic':loop.time()+2.0})
+            self._diagnostic_timeout_task = asyncio.create_task(self._timeout_active_run(run_id, 40.0), name=f'calibration-timeout-{run_id}')
+            return self.db.get_diagnostic_run(run_id)
+
+    async def confirm_actuator_extension(
+        self,
+        *,
+        run_id: str,
+        module_id: str,
+        confirmed: bool,
+    ) -> Dict[str, Any]:
+        async with self._lock:
+            if (
+                run_id != self._active_run_id
+                or module_id != self._active_module_id
+            ):
+                raise RuntimeError(
+                    'Calibration confirmation does not match the active run.'
+                )
+
+            if self._active_operation != 'calibration':
+                raise RuntimeError(
+                    'The active operation is not an actuator calibration.'
+                )
+
+            await self.mcu_writes.put({
+                'action': 'confirm_actuator_extension',
+                'run_id': run_id,
+                'transaction_id': self._active_transaction_id,
+                'id': module_id,
+                'confirmed': bool(confirmed),
+                '_transient_motion': True,
+            })
+
+            return {
+                'type': 'actuator_extension_confirmation',
+                'ok': True,
+                'run_id': run_id,
+                'module_id': module_id,
+                'confirmed': bool(confirmed),
+            }
 
     async def _timeout_active_run(self, run_id: str, timeout_s: float) -> None:
         try:
             await asyncio.sleep(timeout_s)
+
             async with self._lock:
                 if self._active_run_id != run_id:
                     return
+
+                try:
+                    await self.mcu_writes.put({
+                        'action': 'abort_diagnostic',
+                        'run_id': run_id,
+                        '_transient_motion': True,
+                    })
+                except Exception:
+                    self.logger.log.exception(
+                        'Failed to queue timeout abort for diagnostic run %s.',
+                        run_id,
+                    )
+
                 self.db.update_diagnostic_run(
                     run_id,
                     state='TIMED_OUT',
@@ -208,9 +356,12 @@ class ServiceRuntime:
                         'measurements': {},
                     },
                 )
+
                 self._clear_active(run_id)
+
         except asyncio.CancelledError:
             raise
+
         except Exception:
             self.logger.log.exception('Failed to time out diagnostic run.')
 
@@ -245,7 +396,10 @@ class ServiceRuntime:
         transaction_id = str(message.get('transaction_id') or '')
 
         if not run_id:
-            self.logger.log.warning('Ignoring diagnostic result without run_id.')
+            self.logger.log.warning(
+                'Ignoring diagnostic result without run_id: message=%r',
+                message,
+            )
             return
         if run_id != self._active_run_id:
             self.logger.log.warning('Ignoring stale diagnostic result: run_id=%s', run_id)
@@ -267,6 +421,9 @@ class ServiceRuntime:
             if persisted['state'] not in {'queued', 'running'}:
                 return
             passed = message.get('pass') is True
+            if self._active_operation == 'calibration' and message.get('pass') is True:
+                channel = int(next(m['channel'] for m in self.modules if m.get('id') == module_id))
+                self.db.save_actuator_calibration(channel, message, self._active_actor)
             self.db.update_diagnostic_run(
                 run_id,
                 state='PASSED' if passed else 'FAILED',
@@ -283,11 +440,17 @@ class ServiceRuntime:
     def _clear_active(self, run_id: str) -> None:
         if self._active_run_id != run_id:
             return
+
         self._active_run_id = None
         self._active_module_id = None
         self._active_transaction_id = None
+
+        self._active_operation = None
+        self._active_actor = None
+
         task = self._diagnostic_timeout_task
         self._diagnostic_timeout_task = None
+
         if task is not None and task is not asyncio.current_task():
             task.cancel()
 
@@ -313,55 +476,182 @@ class ServiceRuntime:
         finally:
             self._clear_active(run_id)
 
-    def _command_for(self, module_id: str, run_id: str,
-                    transaction_id: str) -> Dict[str, Any]:
-        module = next((item for item in self.modules if item.get('id') == module_id), None)
+    def _command_for(
+        self,
+        module_id: str,
+        run_id: str,
+        transaction_id: str,
+    ) -> Dict[str, Any]:
+        module = next(
+            (
+                item
+                for item in self.modules
+                if item.get("id") == module_id
+            ),
+            None,
+        )
+
         if module is None:
-            raise ValueError('Unknown diagnostic module.')
+            raise ValueError(
+                "Unknown diagnostic module."
+            )
 
-        category = module.get('category')
-        common = {
-            'id': module_id,
-            'run_id': run_id,
-            'transaction_id': transaction_id,
-        }
+        category = module.get("category")
 
-        if category == 'motor':
+        if category == "motor":
             loop = asyncio.get_running_loop()
+
             return {
-                **common,
-                'action': 'test_motor',
-                'index': int(module.get('index', 0)),
-                'speed': 0.02,
-                'duration_ms': 600,
-                '_transient_motion': True,
-                '_expires_monotonic': loop.time() + 2.0,
+                "id": module_id,
+                "run_id": run_id,
+                "transaction_id": transaction_id,
+                "action": "test_motor",
+                "index": int(
+                    module.get(
+                        "index",
+                        0,
+                    )
+                ),
+                "_transient_motion": True,
+                "_expires_monotonic": (
+                    loop.time() + 2.0
+                ),
             }
 
-        if category == 'actuator':
+        if category == "actuator":
+            channel = int(
+                module.get(
+                    "channel",
+                    0,
+                )
+            )
+
+            calibration = (
+                self.db.get_actuator_calibration(
+                    channel
+                )
+            )
+
+            if calibration is None:
+                raise RuntimeError(
+                    "This actuator must be "
+                    "install-calibrated before testing."
+                )
+
+            extended_target_v = round(
+                float(
+                    calibration[
+                        "extended_feedback_v"
+                    ]
+                ),
+                4,
+            )
+
+            retracted_target_v = round(
+                float(
+                    calibration[
+                        "retracted_feedback_v"
+                    ]
+                ),
+                4,
+            )
+
+            extended_tolerance_v = round(
+                float(
+                    calibration[
+                        "extended_tolerance_v"
+                    ]
+                ),
+                4,
+            )
+
+            retracted_tolerance_v = round(
+                float(
+                    calibration[
+                        "retracted_tolerance_v"
+                    ]
+                ),
+                4,
+            )
+
+            limits = [
+                extended_target_v,
+                retracted_target_v,
+                extended_tolerance_v,
+                retracted_tolerance_v,
+            ]
+
+            for value in limits:
+                if not math.isfinite(value):
+                    raise RuntimeError(
+                        "The saved actuator calibration "
+                        "contains a non-finite value."
+                    )
+
+            if extended_target_v < 0.0:
+                raise RuntimeError(
+                    "The saved extended actuator target "
+                    "cannot be negative."
+                )
+
+            if retracted_target_v < 0.0:
+                raise RuntimeError(
+                    "The saved retracted actuator target "
+                    "cannot be negative."
+                )
+
+            if extended_tolerance_v <= 0.0:
+                raise RuntimeError(
+                    "The saved extended actuator tolerance "
+                    "must be greater than zero."
+                )
+
+            if retracted_tolerance_v <= 0.0:
+                raise RuntimeError(
+                    "The saved retracted actuator tolerance "
+                    "must be greater than zero."
+                )
+
+            loop = asyncio.get_running_loop()
+
             return {
-                **common,
-                'action': 'test_actuator',
-                'channel': int(module.get('channel', 0)),
-                'voltage': 3.0,
-                'tolerance': 0.8,
-                'settle_ms': 100,
+                "id": module_id,
+                "run_id": run_id,
+                "transaction_id": transaction_id,
+                "action": "test_actuator",
+                "channel": channel,
+                "extend_voltage": 3.0,
+                "limits": limits,
+                "_transient_motion": True,
+                "_expires_monotonic": (
+                    loop.time() + 2.0
+                ),
             }
 
-        if category == 'sensor':
+        if category == "sensor":
             return {
-                **common,
-                'action': 'test_sensor',
-                'sensor': module.get('sensor', 'ultrasonic'),
+                "id": module_id,
+                "run_id": run_id,
+                "transaction_id": transaction_id,
+                "action": "test_sensor",
+                "sensor": module.get(
+                    "sensor",
+                    "ultrasonic",
+                ),
             }
 
-        if category == 'andon':
+        if category == "andon":
             return {
-                **common,
-                'action': 'test_andon',
+                "id": module_id,
+                "run_id": run_id,
+                "transaction_id": transaction_id,
+                "action": "test_andon",
             }
 
-        raise ValueError(f'Unsupported diagnostic category: {category}')
+        raise ValueError(
+            "Unsupported diagnostic category: "
+            f"{category}"
+        )
 
     @staticmethod
     def _battery_percent(server) -> Optional[float]:
