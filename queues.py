@@ -18,6 +18,7 @@ class Queues():
         self.h7_runtime_ready = asyncio.Event()
         self.feedforward_acks = asyncio.Queue()
         self.motor_direction_acks = asyncio.Queue()
+        self.process_start_acks = asyncio.Queue()
 
     def show_queue_size(self):
         for q in self.queues:

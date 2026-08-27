@@ -1,6 +1,7 @@
 import asyncio
 import json
 import math
+from uuid import uuid4
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 import websockets.exceptions
 from websockets.server import serve
@@ -52,6 +53,8 @@ class WebsocketServer():
         #self._active_connections = set[WebsocketServerProtocol] = set()
         self.trigger_acks = queues.trigger_acks
         self.encoder_acks = queues.encoder_acks
+        self.process_start_acks = queues.process_start_acks
+        self._process_start_lock = asyncio.Lock()
         self.feedforward_acks = queues.feedforward_acks
         self.mcu_ready = queues.mcu_ready
         self.job_manager = job_manager
@@ -329,76 +332,76 @@ class WebsocketServer():
 
                 return False
 
-        async def apply_persisted_feedforward(
-            self,
-        ) -> bool:
-            async with self._feedforward_apply_lock:
-                if self._feedforward_runtime_loaded:
-                    return True
+    async def apply_persisted_feedforward(
+        self,
+    ) -> bool:
+        async with self._feedforward_apply_lock:
+            if self._feedforward_runtime_loaded:
+                return True
 
-                try:
-                    persisted_values = (
-                        self.job_manager
-                        .db
-                        .get_feedforward_configuration()
-                    )
+            try:
+                persisted_values = (
+                    self.job_manager
+                    .db
+                    .get_feedforward_configuration()
+                )
 
-                    self.logger.log.info(
-                        "Applying persisted feedforward "
-                        "configuration to H7: "
-                        f"values={persisted_values}"
-                    )
+                self.logger.log.info(
+                    "Applying persisted feedforward "
+                    "configuration to H7: "
+                    f"values={persisted_values}"
+                )
 
-                    result = (
-                        await self.feedforward_manager
-                        .apply_persisted()
-                    )
+                result = (
+                    await self.feedforward_manager
+                    .apply_persisted()
+                )
 
-                    self._feedforward_runtime_loaded = True
-                    self._feedforward_apply_error = None
+                self._feedforward_runtime_loaded = True
+                self._feedforward_apply_error = None
 
-                    self.logger.log.info(
-                        "Persisted feedforward "
-                        "configuration confirmed by H7: "
-                        f"transaction_id="
-                        f"{result.transaction_id} "
-                        f"values={result.values}"
-                    )
+                self.logger.log.info(
+                    "Persisted feedforward "
+                    "configuration confirmed by H7: "
+                    f"transaction_id="
+                    f"{result.transaction_id} "
+                    f"values={result.values}"
+                )
 
-                    await self.responses.put({
-                        "type":
-                            "feedforward_runtime_status",
-                        "loaded": True,
-                        "transaction_id":
-                            result.transaction_id,
-                        "values":
-                            result.values,
-                    })
+                await self.responses.put({
+                    "type":
+                        "feedforward_runtime_status",
+                    "loaded": True,
+                    "transaction_id":
+                        result.transaction_id,
+                    "values":
+                        result.values,
+                })
 
-                    return True
+                return True
 
-                except asyncio.CancelledError:
-                    raise
+            except asyncio.CancelledError:
+                raise
 
-                except Exception as error:
-                    self._feedforward_runtime_loaded = False
-                    self._feedforward_apply_error = str(
-                        error
-                    )
+            except Exception as error:
+                self._feedforward_runtime_loaded = False
+                self._feedforward_apply_error = str(
+                    error
+                )
 
-                    self.logger.log.exception(
-                        "Failed to apply persisted "
-                        "feedforward configuration to H7."
-                    )
+                self.logger.log.exception(
+                    "Failed to apply persisted "
+                    "feedforward configuration to H7."
+                )
 
-                    await self.responses.put({
-                        "type":
-                            "feedforward_runtime_status",
-                        "loaded": False,
-                        "error": str(error),
-                    })
+                await self.responses.put({
+                    "type":
+                        "feedforward_runtime_status",
+                    "loaded": False,
+                    "error": str(error),
+                })
 
-                    return False
+                return False
 
     async def initialize_robot_runtime(self):
         """
@@ -475,12 +478,10 @@ class WebsocketServer():
 
             self.logger.log.info(
                 "Initial H7 configuration results: "
-                f"transition_ready="
-                f"{transition_ready} "
-                f"feedforward_ready="
-                f"{feedforward_ready} "
-                f"configuration_ready="
-                f"{configuration_ready}"
+                f"transition_ready={transition_ready} "
+                f"feedforward_ready={feedforward_ready} "
+                f"motor_direction_ready={motor_direction_ready} "
+                f"configuration_ready={configuration_ready}"
             )
 
             # Encoder recovery is a separate readiness requirement.
@@ -524,15 +525,28 @@ class WebsocketServer():
 
                 await self.responses.put({
                     "type": "startup_status",
-                    "state": "ready",
-                    "ready": True,
-                    "stage": "complete",
-                    "configuration_loaded": True,
+                    "state": "fault",
+                    "ready": False,
+                    "stage": "encoder_recovery",
+                    "error": "encoder_recovery_timeout",
+                    "message":
+                        self.encoder_startup_error,
+                    "configuration_loaded": (
+                        self.configuration_loaded_to_mcu
+                        and self._feedforward_runtime_loaded
+                        and self._motor_direction_runtime_loaded
+                    ),
                     "transition_configuration_loaded":
                         self.configuration_loaded_to_mcu,
                     "feedforward_configuration_loaded":
                         self._feedforward_runtime_loaded,
-                    "encoder_valid": True,
+                    "motor_direction_loaded":
+                        self._motor_direction_runtime_loaded,
+                    "encoder_valid": False,
+                    "encoder_state": (
+                        self.encoder_persistence
+                        .state.value
+                    ),
                 })
 
             except asyncio.CancelledError:
@@ -570,7 +584,12 @@ class WebsocketServer():
                     "ready": True,
                     "stage": "complete",
                     "configuration_loaded": True,
+                    "transition_configuration_loaded": True,
+                    "feedforward_configuration_loaded": True,
+                    "motor_direction_loaded": True,
                     "encoder_valid": True,
+                    "encoder_state":
+                        self.encoder_persistence.state.value,
                 })
 
                 self.logger.log.info(
@@ -601,13 +620,26 @@ class WebsocketServer():
                     )
                 )
 
+            if not motor_direction_ready:
+                errors.append(
+                    self._motor_direction_apply_error
+                    or (
+                        "Motor direction configuration "
+                        "was not loaded."
+                    )
+                )
+
             if not self.encoder_startup_ready:
                 errors.append(
                     self.encoder_startup_error
                     or "Encoder is not valid."
                 )
 
-            self.startup_error = " ".join(errors)
+            self.startup_error = " ".join(
+                error
+                for error in errors
+                if error
+            )
 
             await self.responses.put({
                 "type": "startup_status",
@@ -617,26 +649,44 @@ class WebsocketServer():
                 "configuration_loaded": (
                     self.configuration_loaded_to_mcu
                     and self._feedforward_runtime_loaded
+                    and self._motor_direction_runtime_loaded
                 ),
                 "transition_configuration_loaded":
                     self.configuration_loaded_to_mcu,
                 "feedforward_configuration_loaded":
                     self._feedforward_runtime_loaded,
+                "motor_direction_loaded":
+                    self._motor_direction_runtime_loaded,
                 "encoder_valid":
                     self.encoder_startup_ready,
+                "encoder_state":
+                    self.encoder_persistence.state.value,
                 "message":
                     self.startup_error,
+                "configuration_errors": {
+                    "transition":
+                        self.configuration_apply_error,
+                    "feedforward":
+                        self._feedforward_apply_error,
+                    "motor_direction":
+                        self._motor_direction_apply_error,
+                    "encoder":
+                        self.encoder_startup_error,
+                },
             })
 
             self.logger.log.error(
-                "Robot runtime initialization "
-                "incomplete: "
+                "Robot runtime initialization incomplete: "
                 f"transition_configuration_loaded="
                 f"{self.configuration_loaded_to_mcu}, "
                 f"feedforward_configuration_loaded="
                 f"{self._feedforward_runtime_loaded}, "
+                f"motor_direction_loaded="
+                f"{self._motor_direction_runtime_loaded}, "
                 f"encoder_valid="
                 f"{self.encoder_startup_ready}, "
+                f"encoder_state="
+                f"{self.encoder_persistence.state.value}, "
                 f"error={self.startup_error}"
             )
 
@@ -736,8 +786,19 @@ class WebsocketServer():
                             )
                         )
 
+                    if not motor_direction_ready:
+                        errors.append(
+                            self._motor_direction_apply_error
+                            or (
+                                "Motor direction configuration "
+                                "reapplication failed."
+                            )
+                        )
+
                     self.startup_error = " ".join(
-                        errors
+                        error
+                        for error in errors
+                        if error
                     )
 
                     await self.responses.put({
@@ -748,8 +809,18 @@ class WebsocketServer():
                             transition_ready,
                         "feedforward_configuration_loaded":
                             feedforward_ready,
+                        "motor_direction_loaded":
+                            motor_direction_ready,
                         "error":
                             self.startup_error,
+                        "configuration_errors": {
+                            "transition":
+                                self.configuration_apply_error,
+                            "feedforward":
+                                self._feedforward_apply_error,
+                            "motor_direction":
+                                self._motor_direction_apply_error,
+                        },
                     })
 
                     continue
@@ -767,14 +838,16 @@ class WebsocketServer():
                         True,
                     "feedforward_configuration_loaded":
                         True,
+                    "motor_direction_loaded":
+                        True,
                 })
 
                 self.logger.log.info(
-                    "Persisted transition and "
-                    "feedforward configuration were "
-                    "confirmed for the restored H7 "
-                    "serial session. Motion remains "
-                    "stopped until explicitly started."
+                    "Persisted transition, feedforward, and "
+                    "motor direction configuration were "
+                    "confirmed for the restored H7 serial "
+                    "session. Motion remains stopped until "
+                    "explicitly started."
                 )
 
             except asyncio.TimeoutError:
@@ -784,19 +857,9 @@ class WebsocketServer():
                     "reapplication."
                 )
 
-                self.configuration_loaded_to_mcu = False
-                self._feedforward_runtime_loaded = False
-
-                self.configuration_apply_error = (
+                self.invalidate_h7_runtime_configuration(
                     error_message
                 )
-
-                self._feedforward_apply_error = (
-                    error_message
-                )
-
-                self.startup_complete.clear()
-                self.startup_error = error_message
 
                 self.logger.log.error(
                     error_message
@@ -810,19 +873,9 @@ class WebsocketServer():
                     error
                 )
 
-                self.configuration_loaded_to_mcu = False
-                self._feedforward_runtime_loaded = False
-
-                self.configuration_apply_error = (
+                self.invalidate_h7_runtime_configuration(
                     error_message
                 )
-
-                self._feedforward_apply_error = (
-                    error_message
-                )
-
-                self.startup_complete.clear()
-                self.startup_error = error_message
 
                 self.logger.log.exception(
                     "Unexpected runtime "
@@ -1142,45 +1195,43 @@ class WebsocketServer():
                         event_type
                         == "mcu_serial_connection_restored"
                     ):
-                        self.configuration_loaded_to_mcu = False
-                        self._feedforward_runtime_loaded = False
-
-                        self.configuration_apply_error = (
+                        restoration_reason = (
                             "Waiting for H7 runtime readiness "
                             "after serial connection restoration."
                         )
 
-                        self._feedforward_apply_error = (
-                            "Waiting for H7 runtime readiness "
-                            "after serial connection restoration."
+                        self.invalidate_h7_runtime_configuration(
+                            restoration_reason
                         )
-
-                        self.startup_complete.clear()
 
                         if (
                             self
                             ._initial_runtime_configuration_attempted
                         ):
                             self.logger.log.info(
-                                "Scheduling transition and "
-                                "feedforward reapplication for "
-                                "the restored H7 serial session."
+                                "Scheduling transition, feedforward, "
+                                "and motor direction reapplication "
+                                "for the restored H7 serial session."
                             )
 
                             self._configuration_reapply_event.set()
 
                         else:
                             self.logger.log.info(
-                                "Initial runtime initialization "
-                                "owns configuration application "
-                                "for this serial session."
+                                "Initial runtime initialization owns "
+                                "configuration application for this "
+                                "serial session."
                             )
 
                         self.logger.log.warning(
                             "MCU serial session restored. "
-                            "Transition and feedforward runtime "
-                            "configuration are now unconfirmed."
+                            "Transition, feedforward, and motor "
+                            "direction runtime configuration are "
+                            "now unconfirmed. Motion remains stopped "
+                            "until configuration is reapplied and a "
+                            "new operator start is accepted."
                         )
+
 
                     elif (
                         event_type
@@ -1190,18 +1241,18 @@ class WebsocketServer():
                             msg
                         )
 
-                        self.configuration_loaded_to_mcu = False
-                        self._feedforward_runtime_loaded = False
-
-                        self.configuration_apply_error = (
+                        self.invalidate_h7_runtime_configuration(
                             "MCU serial connection was lost."
                         )
 
-                        self._feedforward_apply_error = (
-                            "MCU serial connection was lost."
+                        self.logger.log.warning(
+                            "MCU serial session lost. All H7 "
+                            "runtime configuration confirmations "
+                            "were invalidated. Process start is "
+                            "blocked until the H7 runtime is ready "
+                            "and all configuration domains are "
+                            "confirmed again."
                         )
-
-                        self.startup_complete.clear()
 
                     if self.job_manager is not None:
                         try:
@@ -1968,6 +2019,17 @@ class WebsocketServer():
         # ==========================================================
         # Request-specific robot configuration APIs
         # ==========================================================
+
+        if t == "get_process_start_readiness":
+            await self.send_response(
+                websocket,
+                {
+                    "type": "process_start_readiness",
+                    **self.process_start_readiness(),
+                },
+                request_id=cmd.get("req_id"),
+            )
+            return
 
         if t == "get_robot_configuration":
             request_id = cmd.get("req_id")
@@ -3071,92 +3133,125 @@ class WebsocketServer():
         # ==========================================================
 
         if t == "start_process":
-            request_id = cmd.get(
-                "req_id"
+            request_id = cmd.get("req_id")
+
+            if request_id is None:
+                self.logger.log.warning(
+                    "Process start request did not "
+                    "include req_id. The request will "
+                    "still be processed, but the HMI "
+                    "cannot reliably correlate its result."
+                )
+
+            readiness = (
+                self.process_start_readiness()
             )
 
-            if not self.configuration_loaded_to_mcu:
+            if not readiness["ready"]:
+                reason = str(
+                    readiness["blocking_reason"]
+                    or "process_start_not_ready"
+                )
+
+                self.logger.log.warning(
+                    "Process start rejected: "
+                    f"reason={reason} "
+                    f"req_id={request_id} "
+                    f"readiness={readiness}"
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=reason,
+                    message=(
+                        "The process cannot start because "
+                        f"{reason}."
+                    ),
+                    request_id=request_id,
+                    details=readiness,
+                )
+                return
+
+            try:
+                acknowledgement = (
+                    await self.request_process_start()
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            "process_start_result",
+                        "ok": True,
+                        "accepted": True,
+                        "state":
+                            acknowledgement.get(
+                                "state",
+                                "running",
+                            ),
+                        "transaction_id":
+                            acknowledgement.get(
+                                "transaction_id"
+                            ),
+                        "reason":
+                            acknowledgement.get(
+                                "reason"
+                            ),
+                    },
+                    request_id=request_id,
+                )
+
+            except asyncio.TimeoutError as error:
                 await self.send_error(
                     websocket,
                     error=(
-                        "transition_configuration_not_loaded"
+                        "process_start_ack_timeout"
                     ),
                     message=(
-                        "The Glue Card transition "
-                        "configuration has not been "
-                        "confirmed by the robot "
-                        "controller."
+                        "The robot controller did not "
+                        "confirm the process start. The "
+                        "command was not retried. Verify "
+                        "the current process state before "
+                        "trying again."
                     ),
                     request_id=request_id,
-                    details=(
-                        self.configuration_apply_error
-                    ),
+                    details=str(error),
                 )
 
-                return
+            except RuntimeError as error:
+                error_code = str(
+                    error
+                    or "process_start_rejected"
+                )
 
-            if not self._feedforward_runtime_loaded:
                 await self.send_error(
                     websocket,
-                    error=(
-                        "feedforward_configuration_not_loaded"
-                    ),
-                    message=(
-                        "The tracking feedforward "
-                        "configuration has not been "
-                        "confirmed by the robot "
-                        "controller."
-                    ),
+                    error=error_code,
+                    message=error_code,
                     request_id=request_id,
                     details=(
-                        self._feedforward_apply_error
+                        self.process_start_readiness()
                     ),
                 )
 
-                return
+            except Exception as error:
+                self.logger.log.exception(
+                    "Process start transaction failed."
+                )
 
-            if not self._motor_direction_runtime_loaded:
                 await self.send_error(
                     websocket,
-                    error=(
-                        "motor_direction_not_loaded"
-                    ),
+                    error="process_start_failed",
                     message=(
-                        "The motor installation "
-                        "directions have not been "
-                        "confirmed by the robot "
-                        "controller."
+                        "The process start request "
+                        "could not be completed."
                     ),
                     request_id=request_id,
-                    details=(
-                        self
-                        ._motor_direction_apply_error
-                    ),
+                    details=str(error),
                 )
-
-                return
-
-            if (
-                self.encoder_persistence.state
-                != EncoderRecoveryState.VALID
-            ):
-                await self.send_error(
-                    websocket,
-                    error="encoder_not_valid",
-                    message=(
-                        "Encoder recovery must complete "
-                        "before the process can start."
-                    ),
-                    request_id=request_id,
-                )
-
-                return
-
-            await self.mcu_writes.put({
-                "action": "start_process",
-            })
 
             return
+
 
         if t == "stop_process":
             await self.mcu_writes.put({
@@ -3816,6 +3911,298 @@ class WebsocketServer():
             "motor_4": int(raw.get("motor_4", 1)),
         }
 
+
+    def process_start_readiness(self) -> Dict[str, Any]:
+        encoder_state = self.encoder_persistence.state
+
+        h7_ready = self.h7_runtime_ready.is_set()
+        transition_ready = self.configuration_loaded_to_mcu
+        feedforward_ready = self._feedforward_runtime_loaded
+        motor_direction_ready = self._motor_direction_runtime_loaded
+        encoder_ready = (
+            encoder_state == EncoderRecoveryState.VALID
+        )
+
+        diagnostic_active = (
+            self.service_runtime._active_run_id
+            is not None
+        )
+
+        diagnostic_plan_active = (
+            self.diagnostic_plan_runtime.active
+        )
+
+        process_status = (
+            self.latest_process_status
+            if isinstance(
+                self.latest_process_status,
+                dict,
+            )
+            else {}
+        )
+
+        process_state = str(
+            process_status.get(
+                "state",
+                "unknown",
+            )
+        ).strip().lower()
+
+        process_active = (
+            process_status.get("active") is True
+            or process_state in {
+                "running",
+                "active",
+                "started",
+                "starting",
+                "stopping",
+            }
+        )
+
+        blocking_reason = None
+
+        if not h7_ready:
+            blocking_reason = "h7_runtime_not_ready"
+
+        elif not transition_ready:
+            blocking_reason = (
+                "transition_configuration_not_loaded"
+            )
+
+        elif not feedforward_ready:
+            blocking_reason = (
+                "feedforward_configuration_not_loaded"
+            )
+
+        elif not motor_direction_ready:
+            blocking_reason = (
+                "motor_direction_not_loaded"
+            )
+
+        elif not encoder_ready:
+            blocking_reason = "encoder_not_valid"
+
+        elif diagnostic_active:
+            blocking_reason = "diagnostic_active"
+
+        elif diagnostic_plan_active:
+            blocking_reason = (
+                "diagnostic_plan_active"
+            )
+
+        elif process_active:
+            blocking_reason = (
+                "process_already_active"
+            )
+
+        return {
+            "ready": blocking_reason is None,
+            "blocking_reason": blocking_reason,
+            "h7_runtime_ready": h7_ready,
+            "transition_configuration_loaded":
+                transition_ready,
+            "feedforward_configuration_loaded":
+                feedforward_ready,
+            "motor_direction_loaded":
+                motor_direction_ready,
+            "encoder_valid": encoder_ready,
+            "encoder_state": encoder_state.value,
+            "encoder_session_id": (
+                self.encoder_persistence
+                .accepted_session_id
+            ),
+            "motor_power_present": (
+                self.encoder_persistence
+                .motor_power_present
+            ),
+            "diagnostic_active": diagnostic_active,
+            "diagnostic_plan_active":
+                diagnostic_plan_active,
+            "process_active": process_active,
+            "process_state": process_state,
+            "startup_complete":
+                self.startup_complete.is_set(),
+            "startup_error": self.startup_error,
+            "configuration_errors": {
+                "transition":
+                    self.configuration_apply_error,
+                "feedforward":
+                    self._feedforward_apply_error,
+                "motor_direction":
+                    self._motor_direction_apply_error,
+            },
+        }
+
+    def invalidate_h7_runtime_configuration(
+        self,
+        reason: str,
+    ) -> None:
+        self.configuration_loaded_to_mcu = False
+        self._feedforward_runtime_loaded = False
+        self._motor_direction_runtime_loaded = False
+
+        self.configuration_apply_error = reason
+        self._feedforward_apply_error = reason
+        self._motor_direction_apply_error = reason
+
+        self.startup_complete.clear()
+        self.startup_error = reason
+
+    def drain_process_start_acks(self) -> None:
+        while True:
+            try:
+                self.process_start_acks.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+
+    async def wait_for_process_start_ack(
+        self,
+        transaction_id: str,
+        timeout_s: float = 5.0,
+    ) -> Dict[str, Any]:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+
+        while True:
+            remaining = deadline - loop.time()
+
+            if remaining <= 0.0:
+                raise asyncio.TimeoutError(
+                    "Timed out waiting for H7 "
+                    "process-start acknowledgement."
+                )
+
+            message = await asyncio.wait_for(
+                self.process_start_acks.get(),
+                timeout=remaining,
+            )
+
+            if not isinstance(message, dict):
+                self.logger.log.warning(
+                    "Ignoring non-dictionary process "
+                    "start acknowledgement: "
+                    f"{message!r}"
+                )
+                continue
+
+            received_transaction_id = str(
+                message.get(
+                    "transaction_id",
+                    "",
+                )
+            )
+
+            if (
+                received_transaction_id
+                != transaction_id
+            ):
+                self.logger.log.warning(
+                    "Ignoring unmatched process start "
+                    "acknowledgement: "
+                    f"expected_transaction_id="
+                    f"{transaction_id} "
+                    f"received_transaction_id="
+                    f"{received_transaction_id}"
+                )
+                continue
+
+            return message
+
+    async def request_process_start(
+        self,
+    ) -> Dict[str, Any]:
+        async with self._process_start_lock:
+            readiness = (
+                self.process_start_readiness()
+            )
+
+            if not readiness["ready"]:
+                reason = str(
+                    readiness["blocking_reason"]
+                    or "process_start_not_ready"
+                )
+
+                self.logger.log.warning(
+                    "Process start rejected before "
+                    "UART transmission: "
+                    f"reason={reason} "
+                    f"readiness={readiness}"
+                )
+
+                raise RuntimeError(reason)
+
+            transaction_id = (
+                f"process-start-{uuid4()}"
+            )
+
+            self.drain_process_start_acks()
+
+            await self.mcu_writes.put({
+                "action": "start_process",
+                "transaction_id":
+                    transaction_id,
+            })
+
+            self.logger.log.info(
+                "Process start queued for H7: "
+                f"transaction_id={transaction_id} "
+                f"readiness={readiness}"
+            )
+
+            try:
+                acknowledgement = (
+                    await self
+                    .wait_for_process_start_ack(
+                        transaction_id,
+                        timeout_s=5.0,
+                    )
+                )
+
+            except asyncio.TimeoutError:
+                self.logger.log.error(
+                    "Process start result unknown: "
+                    "H7 acknowledgement timed out. "
+                    "The command will not be retried "
+                    "automatically. "
+                    f"transaction_id={transaction_id}"
+                )
+
+                raise
+
+            if (
+                acknowledgement.get("ok")
+                is not True
+                or acknowledgement.get(
+                    "accepted"
+                )
+                is not True
+            ):
+                error = str(
+                    acknowledgement.get(
+                        "error",
+                        "process_start_rejected",
+                    )
+                )
+
+                self.logger.log.warning(
+                    "H7 rejected process start: "
+                    f"transaction_id="
+                    f"{transaction_id} "
+                    f"error={error} "
+                    f"acknowledgement="
+                    f"{acknowledgement}"
+                )
+
+                raise RuntimeError(error)
+
+            self.logger.log.info(
+                "H7 accepted process start: "
+                f"transaction_id={transaction_id} "
+                f"state="
+                f"{acknowledgement.get('state')}"
+            )
+
+            return acknowledgement
 
     @staticmethod
     def normalize_trigger_for_mcu(trig: Dict[str, Any], *, default_delay_s: Optional[float] = None) -> Dict[str, Any]:

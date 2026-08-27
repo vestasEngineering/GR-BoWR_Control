@@ -30,6 +30,7 @@ class SerialServer:
         self.ultrasonic_log_path = self._build_ultrasonic_log_path()
         self.feedforward_acks = queues.feedforward_acks
         self.motor_direction_acks = queues.motor_direction_acks
+        self.process_start_acks = queues.process_start_acks
 
         # State
         self.last_andon_code: Optional[int] = None
@@ -775,6 +776,29 @@ class SerialServer:
                     elif msg_dict.get("type") in ("encoder_reset", "encoder_set"):
                         await self.encoder_acks.put(msg_dict)
                         await self.mcu_reads.put(msg_dict)
+
+                    elif (
+                        msg_dict.get("type")
+                        == "process_start_ack"
+                    ):
+                        await self.process_start_acks.put(
+                            msg_dict
+                        )
+
+                        await self.mcu_reads.put(
+                            msg_dict
+                        )
+
+                        self.logger.log.info(
+                            "Process start acknowledgement: "
+                            f"ok={msg_dict.get('ok')} "
+                            f"accepted="
+                            f"{msg_dict.get('accepted')} "
+                            f"state={msg_dict.get('state')} "
+                            f"transaction_id="
+                            f"{msg_dict.get('transaction_id')} "
+                            f"error={msg_dict.get('error')}"
+                        )
 
                     elif msg_dict.get("type") == "process_status":
                         self.logger.log.info(
