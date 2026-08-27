@@ -28,6 +28,8 @@ class SerialServer:
         self.h7_runtime_ready = queues.h7_runtime_ready
         self.ultrasonic_dbg = queues.ultrasonic_dbg
         self.ultrasonic_log_path = self._build_ultrasonic_log_path()
+        self.feedforward_acks = queues.feedforward_acks
+        self.motor_direction_acks = queues.motor_direction_acks
 
         # State
         self.last_andon_code: Optional[int] = None
@@ -470,10 +472,19 @@ class SerialServer:
                         f"payload={wire_msg}"
                     )
 
+                    if len(raw) > 240:
+                        chunk_size = 32
+                        inter_chunk_delay_s = 0.006
+                    else:
+                        chunk_size = 64
+                        inter_chunk_delay_s = 0.003
+
                     await self._write_serial_frame(
                         raw,
-                        chunk_size=64,
-                        inter_chunk_delay_s=0.003,
+                        chunk_size=chunk_size,
+                        inter_chunk_delay_s=(
+                            inter_chunk_delay_s
+                        ),
                     )
 
                     self._last_tx = (
@@ -776,6 +787,35 @@ class SerialServer:
 
                         await self.mcu_reads.put(msg_dict)
 
+                    elif msg_dict.get("type") == "feedforward_configuration_ack":
+                        await self.feedforward_acks.put(msg_dict)
+                        self.logger.log.info(
+                            "Feedforward acknowledgement: "
+                            f"ok={msg_dict.get('ok')} "
+                            f"transaction_id="
+                            f"{msg_dict.get('transaction_id')} "
+                            f"error={msg_dict.get('error')} "
+                            f"ff={msg_dict.get('ff')}"
+                        )
+
+                    elif (
+                        msg_dict.get("type")
+                        == "motor_direction_ack"
+                    ):
+                        await self.motor_direction_acks.put(
+                            msg_dict
+                        )
+
+                        self.logger.log.info(
+                            "Motor direction acknowledgement: "
+                            f"ok={msg_dict.get('ok')} "
+                            f"transaction_id="
+                            f"{msg_dict.get('transaction_id')} "
+                            f"error={msg_dict.get('error')} "
+                            f"directions="
+                            f"{msg_dict.get('directions')}"
+                        )
+
                     # ------------------------------------------------------
                     # SSv Glue Card / actuator telemetry
                     # ------------------------------------------------------
@@ -895,8 +935,8 @@ class SerialServer:
         self,
         raw: bytes,
         *,
-        chunk_size: int = 64,
-        inter_chunk_delay_s: float = 0.003,
+        chunk_size: int = 32,
+        inter_chunk_delay_s: float = 0.006,
     ) -> None:
         """
         Write one newline-delimited JSON frame in bounded chunks.

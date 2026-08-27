@@ -1,8 +1,9 @@
 # database_service.py
 from __future__ import annotations
 from configuration_db import ConfigurationDatabaseMixin
-from encoder_checkpoint_db import (EncoderCheckpointDatabaseMixin,)
+from encoder_checkpoint_db import EncoderCheckpointDatabaseMixin
 from actuator_calibration_db import ActuatorCalibrationDatabaseMixin
+from configuration_db_feedforward_mixin import FeedforwardConfigurationDatabaseMixin
 import json
 import sqlite3
 import threading
@@ -38,6 +39,7 @@ def utc_now_iso() -> str:
 
 class DatabaseService(
     ConfigurationDatabaseMixin,
+    FeedforwardConfigurationDatabaseMixin,
     EncoderCheckpointDatabaseMixin,
     ServiceDatabaseMixin,
     ActuatorCalibrationDatabaseMixin,
@@ -84,6 +86,7 @@ class DatabaseService(
         self.create_service_tables()
         self.create_actuator_calibration_tables()
         self.migrate_configuration_tables()
+        self.migrate_feedforward_configuration()
         self._migrate_existing_database()
         self.migrate_encoder_checkpoint_columns()
         self.seed_default_configuration_if_empty()

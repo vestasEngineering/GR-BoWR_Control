@@ -442,6 +442,132 @@ class ConfigurationDatabaseMixin:
             "override_updated_at": row["override_updated_at"],
         }
 
+    def save_motor_directions(
+        self,
+        *,
+        directions: Dict[str, int],
+        actor: str,
+        event_type: str,
+        restored_defaults: bool,
+        transaction_id: str,
+    ) -> None:
+        from motor_direction_config import (
+            validate_motor_directions,
+        )
+
+        clean = validate_motor_directions(
+            directions
+        )
+
+        now = self._config_utc_now()
+
+        with self._lock:
+            try:
+                self.conn.execute(
+                    "BEGIN IMMEDIATE"
+                )
+
+                row = self.conn.execute(
+                    """
+                    SELECT motor_direction_json
+                    FROM configuration_state
+                    WHERE id = 1
+                    """
+                ).fetchone()
+
+                if row is None:
+                    raise RuntimeError(
+                        "The configuration_state "
+                        "singleton row is missing."
+                    )
+
+                before = self._json_loads(
+                    row[
+                        "motor_direction_json"
+                    ],
+                    {},
+                )
+
+                cursor = self.conn.execute(
+                    """
+                    UPDATE configuration_state
+                    SET
+                        motor_direction_json = ?,
+                        updated_at = ?
+                    WHERE id = 1
+                    """,
+                    (
+                        self._json_dumps(
+                            clean
+                        ),
+                        now,
+                    ),
+                )
+
+                if cursor.rowcount != 1:
+                    raise RuntimeError(
+                        "Motor direction update "
+                        "did not modify the "
+                        "configuration_state row."
+                    )
+
+                self._insert_configuration_event_locked(
+                    event_type,
+                    None,
+                    None,
+                    actor=actor,
+                    source="admin_hmi",
+                    before=before,
+                    after=clean,
+                    details={
+                        "restored_factory_defaults":
+                            restored_defaults,
+                        "transaction_id":
+                            transaction_id,
+                    },
+                )
+
+                self.conn.commit()
+
+                verified_row = (
+                    self.conn.execute(
+                        """
+                        SELECT
+                            motor_direction_json
+                        FROM configuration_state
+                        WHERE id = 1
+                        """
+                    ).fetchone()
+                )
+
+                if verified_row is None:
+                    raise RuntimeError(
+                        "Motor directions could not "
+                        "be reloaded after commit."
+                    )
+
+                verified = (
+                    validate_motor_directions(
+                        self._json_loads(
+                            verified_row[
+                                "motor_direction_json"
+                            ],
+                            {},
+                        )
+                    )
+                )
+
+                if verified != clean:
+                    raise RuntimeError(
+                        "Motor direction database "
+                        "verification failed after "
+                        "commit."
+                    )
+
+            except Exception:
+                self.conn.rollback()
+                raise
+
     def get_configuration_catalog(self) -> Dict[str, Any]:
         with self._lock:
             robots = self.conn.execute(

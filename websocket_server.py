@@ -8,6 +8,8 @@ from service_runtime import ServiceRuntime
 from configuration_manager import ConfigurationManager
 from encoder_persistence import (EncoderPersistenceCoordinator, EncoderRecoveryState)
 from diagnostic_plan_runtime import DiagnosticPlanRuntime
+from feedforward_config import FeedforwardManager
+from motor_direction_config import (FACTORY_MOTOR_DIRECTIONS, MotorDirectionManager,)
 from health import HealthModel
 from logger import Logger
 from queues import Queues
@@ -50,6 +52,7 @@ class WebsocketServer():
         #self._active_connections = set[WebsocketServerProtocol] = set()
         self.trigger_acks = queues.trigger_acks
         self.encoder_acks = queues.encoder_acks
+        self.feedforward_acks = queues.feedforward_acks
         self.mcu_ready = queues.mcu_ready
         self.job_manager = job_manager
 
@@ -75,8 +78,41 @@ class WebsocketServer():
             logger=self.logger,
         )
 
+        self._feedforward_apply_lock = (
+            asyncio.Lock()
+        )
+
+        self.motor_direction_acks = (
+            queues.motor_direction_acks
+        )
+
         self.latest_process_status: Optional[dict] = None
         self.latest_actuator_status: Optional[dict] = None
+
+        self.feedforward_manager = FeedforwardManager(
+            db=job_manager.db,
+            mcu_writes=self.mcu_writes,
+            ack_queue=self.feedforward_acks,
+            process_active=self._process_is_confirmed_active,
+            logger=self.logger,
+            timeout_s=5.0,
+        )
+
+        self.motor_direction_manager = (
+            MotorDirectionManager(
+                db=job_manager.db,
+                mcu_writes=self.mcu_writes,
+                ack_queue=(
+                    self.motor_direction_acks
+                ),
+                process_active=(
+                    self
+                    ._process_is_confirmed_active
+                ),
+                logger=self.logger,
+                timeout_s=8.0,
+            )
+        )
 
         self.h7_runtime_ready = queues.h7_runtime_ready
 
@@ -85,6 +121,12 @@ class WebsocketServer():
 
         self.configuration_loaded_to_mcu = False
         self.configuration_apply_error: Optional[str] = None
+
+        self._feedforward_runtime_loaded = False
+        self._feedforward_apply_error: Optional[str] = None
+
+        self._motor_direction_runtime_loaded = False
+        self._motor_direction_apply_error: Optional[str] = None
 
         self.startup_complete = asyncio.Event()
         self.startup_error: Optional[str] = None
@@ -287,6 +329,77 @@ class WebsocketServer():
 
                 return False
 
+        async def apply_persisted_feedforward(
+            self,
+        ) -> bool:
+            async with self._feedforward_apply_lock:
+                if self._feedforward_runtime_loaded:
+                    return True
+
+                try:
+                    persisted_values = (
+                        self.job_manager
+                        .db
+                        .get_feedforward_configuration()
+                    )
+
+                    self.logger.log.info(
+                        "Applying persisted feedforward "
+                        "configuration to H7: "
+                        f"values={persisted_values}"
+                    )
+
+                    result = (
+                        await self.feedforward_manager
+                        .apply_persisted()
+                    )
+
+                    self._feedforward_runtime_loaded = True
+                    self._feedforward_apply_error = None
+
+                    self.logger.log.info(
+                        "Persisted feedforward "
+                        "configuration confirmed by H7: "
+                        f"transaction_id="
+                        f"{result.transaction_id} "
+                        f"values={result.values}"
+                    )
+
+                    await self.responses.put({
+                        "type":
+                            "feedforward_runtime_status",
+                        "loaded": True,
+                        "transaction_id":
+                            result.transaction_id,
+                        "values":
+                            result.values,
+                    })
+
+                    return True
+
+                except asyncio.CancelledError:
+                    raise
+
+                except Exception as error:
+                    self._feedforward_runtime_loaded = False
+                    self._feedforward_apply_error = str(
+                        error
+                    )
+
+                    self.logger.log.exception(
+                        "Failed to apply persisted "
+                        "feedforward configuration to H7."
+                    )
+
+                    await self.responses.put({
+                        "type":
+                            "feedforward_runtime_status",
+                        "loaded": False,
+                        "error": str(error),
+                    })
+
+                    return False
+
     async def initialize_robot_runtime(self):
         """
         Wait for H7 boot completion, then initialize configuration and
@@ -331,12 +444,43 @@ class WebsocketServer():
                 "H7 runtime readiness achieved. Beginning runtime initialization."
             )
 
-            # Apply configuration first. This loads the volatile H7
-            # triggerBuffer independently of encoder restoration.
+            # Apply all volatile H7 configuration before
+            # allowing process start.
+            #
+            # Transition and feedforward configuration use
+            # independent acknowledgement paths. Both must
+            # be confirmed.
             self._initial_runtime_configuration_attempted = True
 
+            transition_ready = (
+                await self
+                .apply_persisted_configuration()
+            )
+
+            feedforward_ready = (
+                await self
+                .apply_persisted_feedforward()
+            )
+
+            motor_direction_ready = (
+                await self
+                .apply_persisted_motor_directions()
+            )
+
             configuration_ready = (
-                await self.apply_persisted_configuration()
+                transition_ready
+                and feedforward_ready
+                and motor_direction_ready
+            )
+
+            self.logger.log.info(
+                "Initial H7 configuration results: "
+                f"transition_ready="
+                f"{transition_ready} "
+                f"feedforward_ready="
+                f"{feedforward_ready} "
+                f"configuration_ready="
+                f"{configuration_ready}"
             )
 
             # Encoder recovery is a separate readiness requirement.
@@ -380,14 +524,15 @@ class WebsocketServer():
 
                 await self.responses.put({
                     "type": "startup_status",
-                    "state": "fault",
-                    "ready": False,
-                    "stage": "encoder_recovery",
-                    "error": "encoder_recovery_timeout",
-                    "message": (
-                        str(error)
-                        or self.encoder_startup_error
-                    ),
+                    "state": "ready",
+                    "ready": True,
+                    "stage": "complete",
+                    "configuration_loaded": True,
+                    "transition_configuration_loaded":
+                        self.configuration_loaded_to_mcu,
+                    "feedforward_configuration_loaded":
+                        self._feedforward_runtime_loaded,
+                    "encoder_valid": True,
                 })
 
             except asyncio.CancelledError:
@@ -438,10 +583,22 @@ class WebsocketServer():
 
             errors = []
 
-            if not configuration_ready:
+            if not transition_ready:
                 errors.append(
                     self.configuration_apply_error
-                    or "Configuration was not loaded."
+                    or (
+                        "Transition configuration "
+                        "was not loaded."
+                    )
+                )
+
+            if not feedforward_ready:
+                errors.append(
+                    self._feedforward_apply_error
+                    or (
+                        "Feedforward configuration "
+                        "was not loaded."
+                    )
                 )
 
             if not self.encoder_startup_ready:
@@ -457,17 +614,27 @@ class WebsocketServer():
                 "state": "fault",
                 "ready": False,
                 "stage": "incomplete",
-                "configuration_loaded":
+                "configuration_loaded": (
+                    self.configuration_loaded_to_mcu
+                    and self._feedforward_runtime_loaded
+                ),
+                "transition_configuration_loaded":
                     self.configuration_loaded_to_mcu,
+                "feedforward_configuration_loaded":
+                    self._feedforward_runtime_loaded,
                 "encoder_valid":
                     self.encoder_startup_ready,
-                "message": self.startup_error,
+                "message":
+                    self.startup_error,
             })
 
             self.logger.log.error(
-                "Robot runtime initialization incomplete: "
-                f"configuration_loaded="
+                "Robot runtime initialization "
+                "incomplete: "
+                f"transition_configuration_loaded="
                 f"{self.configuration_loaded_to_mcu}, "
+                f"feedforward_configuration_loaded="
+                f"{self._feedforward_runtime_loaded}, "
                 f"encoder_valid="
                 f"{self.encoder_startup_ready}, "
                 f"error={self.startup_error}"
@@ -479,47 +646,188 @@ class WebsocketServer():
             )
             raise
 
-    async def configuration_reapply_worker(self) -> None:
-        """Reapply the persisted trigger table after each H7 serial session."""
+    async def configuration_reapply_worker(
+        self,
+    ) -> None:
         while True:
             await self._configuration_reapply_event.wait()
+
             self._configuration_reapply_event.clear()
 
             try:
+                self.logger.log.info(
+                    "Runtime configuration "
+                    "reapplication requested."
+                )
+
                 await asyncio.wait_for(
                     self.h7_runtime_ready.wait(),
                     timeout=30.0,
                 )
 
-                if self.configuration_loaded_to_mcu:
-                    continue
+                self.logger.log.info(
+                    "H7 runtime is ready. "
+                    "Reapplying persisted transition "
+                    "and feedforward configuration."
+                )
 
-                loaded = await self.apply_persisted_configuration()
+                transition_ready = (
+                    await self
+                    .apply_persisted_configuration()
+                )
 
-                if not loaded:
+                feedforward_ready = (
+                    await self
+                    .apply_persisted_feedforward()
+                )
+
+                motor_direction_ready = (
+                    await self
+                    .apply_persisted_motor_directions()
+                )
+
+                configuration_ready = (
+                    transition_ready
+                    and feedforward_ready
+                    and motor_direction_ready
+                )
+
+                if not transition_ready:
                     self.logger.log.error(
-                        "Transition configuration reapply failed "
-                        "after MCU reconnection."
+                        "Transition configuration "
+                        "reapplication failed: "
+                        f"{self.configuration_apply_error}"
                     )
 
-            except asyncio.TimeoutError:
-                self.configuration_loaded_to_mcu = False
-                self.configuration_apply_error = (
-                    "H7 runtime readiness timed out after "
-                    "serial connection restoration."
+                if not feedforward_ready:
+                    self.logger.log.error(
+                        "Feedforward configuration "
+                        "reapplication failed: "
+                        f"{self._feedforward_apply_error}"
+                    )
+
+                if not motor_direction_ready:
+                    self.logger.log.error(
+                        "Motor direction configuration "
+                        "reapplication failed: "
+                        f"{self._motor_direction_apply_error}"
+                    )
+
+                if not configuration_ready:
+                    self.startup_complete.clear()
+
+                    errors = []
+
+                    if not transition_ready:
+                        errors.append(
+                            self.configuration_apply_error
+                            or (
+                                "Transition configuration "
+                                "reapplication failed."
+                            )
+                        )
+
+                    if not feedforward_ready:
+                        errors.append(
+                            self._feedforward_apply_error
+                            or (
+                                "Feedforward configuration "
+                                "reapplication failed."
+                            )
+                        )
+
+                    self.startup_error = " ".join(
+                        errors
+                    )
+
+                    await self.responses.put({
+                        "type":
+                            "configuration_runtime_status",
+                        "loaded": False,
+                        "transition_configuration_loaded":
+                            transition_ready,
+                        "feedforward_configuration_loaded":
+                            feedforward_ready,
+                        "error":
+                            self.startup_error,
+                    })
+
+                    continue
+
+                self.startup_error = None
+
+                if self.encoder_startup_ready:
+                    self.startup_complete.set()
+
+                await self.responses.put({
+                    "type":
+                        "configuration_runtime_status",
+                    "loaded": True,
+                    "transition_configuration_loaded":
+                        True,
+                    "feedforward_configuration_loaded":
+                        True,
+                })
+
+                self.logger.log.info(
+                    "Persisted transition and "
+                    "feedforward configuration were "
+                    "confirmed for the restored H7 "
+                    "serial session. Motion remains "
+                    "stopped until explicitly started."
                 )
+
+            except asyncio.TimeoutError:
+                error_message = (
+                    "H7 runtime readiness timed out "
+                    "during configuration "
+                    "reapplication."
+                )
+
+                self.configuration_loaded_to_mcu = False
+                self._feedforward_runtime_loaded = False
+
+                self.configuration_apply_error = (
+                    error_message
+                )
+
+                self._feedforward_apply_error = (
+                    error_message
+                )
+
+                self.startup_complete.clear()
+                self.startup_error = error_message
+
                 self.logger.log.error(
-                    self.configuration_apply_error
+                    error_message
                 )
 
             except asyncio.CancelledError:
                 raise
 
             except Exception as error:
+                error_message = str(
+                    error
+                )
+
                 self.configuration_loaded_to_mcu = False
-                self.configuration_apply_error = str(error)
+                self._feedforward_runtime_loaded = False
+
+                self.configuration_apply_error = (
+                    error_message
+                )
+
+                self._feedforward_apply_error = (
+                    error_message
+                )
+
+                self.startup_complete.clear()
+                self.startup_error = error_message
+
                 self.logger.log.exception(
-                    "Unexpected configuration reapply failure."
+                    "Unexpected runtime "
+                    "configuration reapplication "
+                    "failure."
                 )
 
     async def connection_handler(self, websocket):
@@ -835,34 +1143,64 @@ class WebsocketServer():
                         == "mcu_serial_connection_restored"
                     ):
                         self.configuration_loaded_to_mcu = False
+                        self._feedforward_runtime_loaded = False
 
                         self.configuration_apply_error = (
                             "Waiting for H7 runtime readiness "
                             "after serial connection restoration."
                         )
 
-                        self.startup_complete.clear()
-
-                        # The first serial connection belongs to initial startup.
-                        # initialize_robot_runtime() owns that configuration apply.
-                        #
-                        # After the initial attempt, every new serial session must
-                        # reload the volatile H7 trigger table.
-                        if self._initial_runtime_configuration_attempted:
-                            self._configuration_reapply_event.set()
-
-
-                        self.logger.log.warning(
-                            "MCU serial session restored. Waiting for H7 "
-                            "runtime readiness before reapplying transitions."
+                        self._feedforward_apply_error = (
+                            "Waiting for H7 runtime readiness "
+                            "after serial connection restoration."
                         )
 
-                    elif event_type == "mcu_serial_connection_lost":
-                        self.service_runtime.transport_lost(msg)
+                        self.startup_complete.clear()
+
+                        if (
+                            self
+                            ._initial_runtime_configuration_attempted
+                        ):
+                            self.logger.log.info(
+                                "Scheduling transition and "
+                                "feedforward reapplication for "
+                                "the restored H7 serial session."
+                            )
+
+                            self._configuration_reapply_event.set()
+
+                        else:
+                            self.logger.log.info(
+                                "Initial runtime initialization "
+                                "owns configuration application "
+                                "for this serial session."
+                            )
+
+                        self.logger.log.warning(
+                            "MCU serial session restored. "
+                            "Transition and feedforward runtime "
+                            "configuration are now unconfirmed."
+                        )
+
+                    elif (
+                        event_type
+                        == "mcu_serial_connection_lost"
+                    ):
+                        self.service_runtime.transport_lost(
+                            msg
+                        )
+
                         self.configuration_loaded_to_mcu = False
+                        self._feedforward_runtime_loaded = False
+
                         self.configuration_apply_error = (
                             "MCU serial connection was lost."
                         )
+
+                        self._feedforward_apply_error = (
+                            "MCU serial connection was lost."
+                        )
+
                         self.startup_complete.clear()
 
                     if self.job_manager is not None:
@@ -1360,6 +1698,179 @@ class WebsocketServer():
         return True
 
 
+    async def handle_feedforward_request(
+        self,
+        websocket,
+        cmd: Dict[str, Any],
+    ) -> bool:
+        request_type = cmd.get("type")
+
+        supported_types = {
+            "get_feedforward_configuration",
+            "set_feedforward_configuration",
+            "restore_feedforward_defaults",
+        }
+
+        if request_type not in supported_types:
+            return False
+
+        request_id = cmd.get("req_id")
+
+        try:
+            if request_type == "get_feedforward_configuration":
+                result = self.feedforward_manager.get()
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type": "feedforward_configuration",
+                        "ok": True,
+                        **result,
+                    },
+                    request_id=request_id,
+                )
+
+                return True
+
+            actor = self.validate_actor_initials(
+                cmd
+            )
+
+            if request_type == "set_feedforward_configuration":
+                raw_values = cmd.get(
+                    "values"
+                )
+
+                if not isinstance(
+                    raw_values,
+                    dict,
+                ):
+                    raise ValueError(
+                        "values must be a JSON object."
+                    )
+
+                result = (
+                    await self.feedforward_manager.save(
+                        raw_values,
+                        actor=actor,
+                    )
+                )
+
+                response_type = (
+                    "feedforward_configuration_saved"
+                )
+
+            else:
+                result = (
+                    await self.feedforward_manager
+                    .restore_defaults(
+                        actor=actor,
+                    )
+                )
+
+                response_type = (
+                    "feedforward_defaults_restored"
+                )
+
+            self._feedforward_runtime_loaded = True
+            self._feedforward_apply_error = None
+
+            await self.send_response(
+                websocket,
+                {
+                    "type": response_type,
+                    "ok": True,
+                    "values": result.values,
+                    "transaction_id":
+                        result.transaction_id,
+                    "restored_defaults":
+                        result.restored_defaults,
+                },
+                request_id=request_id,
+            )
+
+        except asyncio.TimeoutError as error:
+            self._feedforward_runtime_loaded = False
+
+            self._feedforward_apply_error = (
+                "The H7 did not confirm the "
+                "feedforward configuration: "
+                f"{error}"
+            )
+
+            self.startup_complete.clear()
+
+            self.logger.log.error(
+                "Feedforward configuration result "
+                "is unknown because the H7 "
+                "acknowledgement timed out: "
+                f"{error}"
+            )
+
+            await self.send_error(
+                websocket,
+                error=(
+                    "feedforward_configuration_timeout"
+                ),
+                message=(
+                    "The robot controller did not "
+                    "confirm the feedforward "
+                    "configuration. Process start is "
+                    "blocked until the stored "
+                    "configuration is reapplied."
+                ),
+                request_id=request_id,
+                details=str(error),
+            )
+
+        except (
+            TypeError,
+            ValueError,
+            RuntimeError,
+        ) as error:
+            self.logger.log.warning(
+                "Feedforward configuration request "
+                f"was rejected: {error}"
+            )
+
+            await self.send_error(
+                websocket,
+                error=(
+                    "feedforward_configuration_rejected"
+                ),
+                message=str(error),
+                request_id=request_id,
+            )
+
+        except Exception as error:
+            self._feedforward_runtime_loaded = False
+
+            self._feedforward_apply_error = str(
+                error
+            )
+
+            self.startup_complete.clear()
+
+            self.logger.log.exception(
+                "Feedforward configuration request "
+                "failed."
+            )
+
+            await self.send_error(
+                websocket,
+                error=(
+                    "feedforward_configuration_failed"
+                ),
+                message=(
+                    "The feedforward configuration "
+                    "could not be completed."
+                ),
+                request_id=request_id,
+                details=str(error),
+            )
+
+        return True
+
 # receive the messages / commands from the tablet
     async def consumer(self, websocket):
         """
@@ -1443,6 +1954,12 @@ class WebsocketServer():
         action = cmd.get("action")
 
         if await self.handle_service_request(
+            websocket,
+            cmd,
+        ):
+            return
+
+        if await self.handle_feedforward_request(
             websocket,
             cmd,
         ):
@@ -1698,38 +2215,258 @@ class WebsocketServer():
 
             return
 
-        if t == "set_motor_direction":
-            request_id = cmd.get("req_id")
+        if t == "get_motor_direction":
+            request_id = cmd.get(
+                "req_id"
+            )
 
             try:
-                directions = dict(
-                    cmd.get("directions") or {}
+                result = (
+                    self.motor_direction_manager
+                    .get()
                 )
-
-                self.config_manager.save_motor_direction(
-                    directions
-                )
-
-                await self.apply_motor_direction_to_mcu()
 
                 await self.send_response(
                     websocket,
                     {
-                        "type": "ack",
+                        "type":
+                            "motor_direction_configuration",
                         "ok": True,
-                        "info": "motor_direction_saved",
+                        **result,
                     },
                     request_id=request_id,
                 )
 
             except Exception as error:
                 self.logger.log.exception(
-                    "Failed to save motor direction."
+                    "Failed to retrieve motor "
+                    "direction configuration."
                 )
 
                 await self.send_error(
                     websocket,
-                    error="set_motor_direction_failed",
+                    error=(
+                        "get_motor_direction_failed"
+                    ),
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            return
+
+        if t == "set_motor_direction":
+            request_id = cmd.get(
+                "req_id"
+            )
+
+            try:
+                actor = (
+                    self.validate_actor_initials(
+                        cmd
+                    )
+                )
+
+                directions = cmd.get(
+                    "directions"
+                )
+
+                if not isinstance(
+                    directions,
+                    dict,
+                ):
+                    raise ValueError(
+                        "directions must be a "
+                        "JSON object."
+                    )
+
+                result = (
+                    await self
+                    .motor_direction_manager
+                    .save(
+                        directions,
+                        actor=actor,
+                    )
+                )
+
+                self._motor_direction_runtime_loaded = (
+                    True
+                )
+
+                self._motor_direction_apply_error = (
+                    None
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            "motor_direction_saved",
+                        "ok": True,
+                        "directions":
+                            result.directions,
+                        "transaction_id":
+                            result.transaction_id,
+                        "restored_defaults":
+                            False,
+                        "is_factory_default": (
+                            result.directions
+                            == FACTORY_MOTOR_DIRECTIONS
+                        ),
+                    },
+                    request_id=request_id,
+                )
+
+            except asyncio.TimeoutError as error:
+                self._motor_direction_runtime_loaded = (
+                    False
+                )
+
+                self._motor_direction_apply_error = (
+                    str(error)
+                )
+
+                self.startup_complete.clear()
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "motor_direction_timeout"
+                    ),
+                    message=(
+                        "The robot controller did "
+                        "not confirm the motor "
+                        "directions."
+                    ),
+                    request_id=request_id,
+                    details=str(error),
+                )
+
+            except (
+                TypeError,
+                ValueError,
+                RuntimeError,
+            ) as error:
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "motor_direction_rejected"
+                    ),
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Motor direction save failed."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "motor_direction_save_failed"
+                    ),
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            return
+
+        if t == "restore_motor_direction_defaults":
+            request_id = cmd.get(
+                "req_id"
+            )
+
+            try:
+                actor = (
+                    self.validate_actor_initials(
+                        cmd
+                    )
+                )
+
+                result = (
+                    await self
+                    .motor_direction_manager
+                    .restore_defaults(
+                        actor=actor,
+                    )
+                )
+
+                self._motor_direction_runtime_loaded = (
+                    True
+                )
+
+                self._motor_direction_apply_error = (
+                    None
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            "motor_direction_defaults_restored",
+                        "ok": True,
+                        "directions":
+                            result.directions,
+                        "transaction_id":
+                            result.transaction_id,
+                        "restored_defaults":
+                            True,
+                        "is_factory_default":
+                            True,
+                    },
+                    request_id=request_id,
+                )
+
+            except asyncio.TimeoutError as error:
+                self._motor_direction_runtime_loaded = (
+                    False
+                )
+
+                self._motor_direction_apply_error = (
+                    str(error)
+                )
+
+                self.startup_complete.clear()
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "motor_direction_restore_timeout"
+                    ),
+                    message=(
+                        "The robot controller did not "
+                        "confirm the factory motor "
+                        "directions."
+                    ),
+                    request_id=request_id,
+                    details=str(error),
+                )
+
+            except (
+                TypeError,
+                ValueError,
+                RuntimeError,
+            ) as error:
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "motor_direction_restore_rejected"
+                    ),
+                    message=str(error),
+                    request_id=request_id,
+                )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Motor direction factory "
+                    "restore failed."
+                )
+
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "motor_direction_restore_failed"
+                    ),
                     message=str(error),
                     request_id=request_id,
                 )
@@ -2142,6 +2879,101 @@ class WebsocketServer():
         # Direct MCU passthrough commands from HMI
         # ==========================================================
 
+        if action == "set_voltage":
+            request_id = cmd.get("req_id")
+
+            try:
+                channel = int(cmd.get("channel"))
+                voltage = float(cmd.get("voltage"))
+
+                if channel not in range(4):
+                    raise ValueError(
+                        "Actuator channel must be between 0 and 3."
+                    )
+
+                if (
+                    not math.isfinite(voltage)
+                    or voltage < 0.0
+                    or voltage > 3.0
+                ):
+                    raise ValueError(
+                        "Actuator voltage must be between 0.0 and 3.0 V."
+                    )
+
+                if not self.h7_runtime_ready.is_set():
+                    raise RuntimeError(
+                        "The H7 runtime is not ready."
+                    )
+
+                process = self.latest_process_status or {}
+
+                process_state = str(
+                    process.get("state", "unknown")
+                ).strip().lower()
+
+                if (
+                    process.get("active") is True
+                    or process_state not in {
+                        "stopped",
+                        "inactive",
+                        "idle",
+                    }
+                ):
+                    raise RuntimeError(
+                        "The robot process must be confirmed stopped."
+                    )
+
+                if self.service_runtime._active_run_id is not None:
+                    raise RuntimeError(
+                        "Manual actuator control is blocked "
+                        "while a diagnostic is running."
+                    )
+
+                if self.diagnostic_plan_runtime.active:
+                    raise RuntimeError(
+                        "Manual actuator control is blocked "
+                        "while the Full System Check is running."
+                    )
+
+                await self.mcu_writes.put({
+                    "action": "set_voltage",
+                    "channel": channel,
+                    "voltage": voltage,
+                    "_transient_motion": True,
+                })
+
+                if request_id is not None:
+                    await self.send_response(
+                        websocket,
+                        {
+                            "type": "actuator_voltage_accepted",
+                            "ok": True,
+                            "channel": channel,
+                            "voltage": voltage,
+                        },
+                        request_id=request_id,
+                    )
+
+            except (
+                TypeError,
+                ValueError,
+                RuntimeError,
+            ) as error:
+                if request_id is not None:
+                    await self.send_error(
+                        websocket,
+                        error="manual_actuator_command_rejected",
+                        message=str(error),
+                        request_id=request_id,
+                    )
+                else:
+                    self.logger.log.warning(
+                        "Manual actuator command rejected: "
+                        f"{error}"
+                    )
+
+            return
+
         if action == "jog":
             direction = cmd.get("dir")
             request_id = cmd.get("req_id")
@@ -2239,17 +3071,69 @@ class WebsocketServer():
         # ==========================================================
 
         if t == "start_process":
+            request_id = cmd.get(
+                "req_id"
+            )
+
             if not self.configuration_loaded_to_mcu:
                 await self.send_error(
                     websocket,
-                    error="configuration_not_loaded",
-                    message=(
-                        "The Glue Card transition configuration has not "
-                        "been loaded into the robot controller."
+                    error=(
+                        "transition_configuration_not_loaded"
                     ),
-                    request_id=cmd.get("req_id"),
-                    details=self.configuration_apply_error,
+                    message=(
+                        "The Glue Card transition "
+                        "configuration has not been "
+                        "confirmed by the robot "
+                        "controller."
+                    ),
+                    request_id=request_id,
+                    details=(
+                        self.configuration_apply_error
+                    ),
                 )
+
+                return
+
+            if not self._feedforward_runtime_loaded:
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "feedforward_configuration_not_loaded"
+                    ),
+                    message=(
+                        "The tracking feedforward "
+                        "configuration has not been "
+                        "confirmed by the robot "
+                        "controller."
+                    ),
+                    request_id=request_id,
+                    details=(
+                        self._feedforward_apply_error
+                    ),
+                )
+
+                return
+
+            if not self._motor_direction_runtime_loaded:
+                await self.send_error(
+                    websocket,
+                    error=(
+                        "motor_direction_not_loaded"
+                    ),
+                    message=(
+                        "The motor installation "
+                        "directions have not been "
+                        "confirmed by the robot "
+                        "controller."
+                    ),
+                    request_id=request_id,
+                    details=(
+                        self
+                        ._motor_direction_apply_error
+                    ),
+                )
+
                 return
 
             if (
@@ -2263,13 +3147,15 @@ class WebsocketServer():
                         "Encoder recovery must complete "
                         "before the process can start."
                     ),
-                    request_id=cmd.get("req_id"),
+                    request_id=request_id,
                 )
+
                 return
 
             await self.mcu_writes.put({
                 "action": "start_process",
             })
+
             return
 
         if t == "stop_process":
@@ -2931,21 +3817,6 @@ class WebsocketServer():
         }
 
 
-    async def apply_motor_direction_to_mcu(self):
-        md = self.get_motor_direction()
-
-        await self.mcu_writes.put({
-            "action": "set_motor_direction",
-            "directions": [
-                md["motor_1"],
-                md["motor_2"],
-                md["motor_3"],
-                md["motor_4"],
-            ],
-        })
-
-        self.logger.log.info(f"WS: applied motor direction {md}")
-
     @staticmethod
     def normalize_trigger_for_mcu(trig: Dict[str, Any], *, default_delay_s: Optional[float] = None) -> Dict[str, Any]:
         """
@@ -3009,6 +3880,31 @@ class WebsocketServer():
                 self.trigger_acks.get_nowait()
             except asyncio.QueueEmpty:
                 break
+
+    def _process_is_confirmed_active(self) -> bool:
+        status = self.latest_process_status
+
+        if not isinstance(status, dict):
+            return False
+
+        if status.get("active") is True:
+            return True
+
+        state = str(
+            status.get(
+                "state",
+                "",
+            )
+        ).strip().lower()
+
+        return state in {
+            "running",
+            "active",
+            "started",
+            "starting",
+            "stopping",
+        }
+
 
     async def wait_for_trigger_ack(
         self,
@@ -3270,3 +4166,63 @@ class WebsocketServer():
             self.logger.log.exception(
                 "Failed to flush encoder checkpoint."
             )
+
+    async def apply_persisted_motor_directions(
+        self,
+    ) -> bool:
+        try:
+            persisted = (
+                self.motor_direction_manager
+                .get()
+            )
+
+            self.logger.log.info(
+                "Applying persisted motor "
+                "directions to H7: "
+                f"directions="
+                f"{persisted['directions']}"
+            )
+
+            result = (
+                await self
+                .motor_direction_manager
+                .apply_persisted()
+            )
+
+            self._motor_direction_runtime_loaded = (
+                True
+            )
+
+            self._motor_direction_apply_error = (
+                None
+            )
+
+            self.logger.log.info(
+                "Persisted motor directions "
+                "confirmed by H7: "
+                f"transaction_id="
+                f"{result.transaction_id} "
+                f"directions="
+                f"{result.directions}"
+            )
+
+            return True
+
+        except asyncio.CancelledError:
+            raise
+
+        except Exception as error:
+            self._motor_direction_runtime_loaded = (
+                False
+            )
+
+            self._motor_direction_apply_error = (
+                str(error)
+            )
+
+            self.logger.log.exception(
+                "Failed to apply persisted "
+                "motor directions."
+            )
+
+            return False
