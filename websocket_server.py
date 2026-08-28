@@ -7,6 +7,7 @@ import websockets.exceptions
 from websockets.server import serve
 from service_runtime import ServiceRuntime
 from configuration_manager import ConfigurationManager
+from actuator_extension_depth import ActuatorExtensionManager
 from encoder_persistence import (EncoderPersistenceCoordinator, EncoderRecoveryState)
 from diagnostic_plan_runtime import DiagnosticPlanRuntime
 from feedforward_config import FeedforwardManager
@@ -54,6 +55,7 @@ class WebsocketServer():
         self.trigger_acks = queues.trigger_acks
         self.encoder_acks = queues.encoder_acks
         self.process_start_acks = queues.process_start_acks
+        self.actuator_extension_acks = queues.actuator_extension_acks
         self._process_start_lock = asyncio.Lock()
         self.feedforward_acks = queues.feedforward_acks
         self.mcu_ready = queues.mcu_ready
@@ -79,13 +81,6 @@ class WebsocketServer():
         if job_manager is None:
             raise ValueError("job_manager is required")
 
-        self.config_manager = ConfigurationManager(
-            db=job_manager.db,
-            mcu_writes=self.mcu_writes,
-            trigger_sender=self.send_triggers_incrementally,
-            logger=self.logger,
-        )
-
         self.service_runtime = ServiceRuntime(
             db=job_manager.db,
             mcu_writes=self.mcu_writes,
@@ -109,6 +104,12 @@ class WebsocketServer():
         self.latest_process_status: Optional[dict] = None
         self.latest_actuator_status: Optional[dict] = None
 
+        self._latest_actuator_status_received_monotonic: Optional[
+            float
+        ] = None
+
+        self._actuator_status_freshness_limit_s = 2.5
+
         self.feedforward_manager = FeedforwardManager(
             db=job_manager.db,
             mcu_writes=self.mcu_writes,
@@ -116,6 +117,25 @@ class WebsocketServer():
             process_active=self._process_is_confirmed_active,
             logger=self.logger,
             timeout_s=5.0,
+        )
+
+        self.actuator_extension_manager = ActuatorExtensionManager(
+            db=job_manager.db,
+            mcu_writes=self.mcu_writes,
+            ack_queue=self.actuator_extension_acks,
+            process_active=self._process_is_confirmed_active,
+            logger=self.logger,
+            timeout_s=5.0,
+        )
+
+        self.config_manager = ConfigurationManager(
+            db=job_manager.db,
+            mcu_writes=self.mcu_writes,
+            trigger_sender=self.send_triggers_incrementally,
+            actuator_extension_manager=(
+                self.actuator_extension_manager
+            ),
+            logger=self.logger,
         )
 
         self.motor_direction_manager = (
@@ -1258,6 +1278,10 @@ class WebsocketServer():
                             msg
                         )
 
+                        self._latest_actuator_status_received_monotonic = (
+                            None
+                        )
+
                         self.invalidate_h7_runtime_configuration(
                             "MCU serial connection was lost."
                         )
@@ -1292,8 +1316,12 @@ class WebsocketServer():
                     and msg.get("type")
                     == "actuator_status"
                 ):
-                    self.latest_actuator_status = (
-                        dict(msg)
+                    self.latest_actuator_status = dict(
+                        msg
+                    )
+
+                    self._latest_actuator_status_received_monotonic = (
+                        asyncio.get_running_loop().time()
                     )
 
                     if self.job_manager:
@@ -2129,6 +2157,534 @@ class WebsocketServer():
 
         return True
 
+    async def handle_actuator_extension_request(
+        self,
+        websocket,
+        cmd: Dict[str, Any],
+    ) -> bool:
+        from actuator_extension_depth import (
+            validate_extension_voltage,
+        )
+
+        request_type = cmd.get("type")
+
+        supported_types = {
+            "get_actuator_extension_depth",
+            "save_actuator_extension_depth",
+            "restore_actuator_extension_depth",
+            "preview_actuator_voltage",
+            "stop_actuator_preview",
+        }
+
+        if request_type not in supported_types:
+            return False
+
+        request_id = cmd.get("req_id")
+
+        try:
+            if (
+                request_type
+                == "get_actuator_extension_depth"
+            ):
+                robot_id = str(
+                    cmd.get(
+                        "robot_id",
+                        "",
+                    )
+                ).strip()
+
+                blade_id = str(
+                    cmd.get(
+                        "blade_id",
+                        "",
+                    )
+                ).strip()
+
+                if not robot_id:
+                    raise ValueError(
+                        "robot_id is required."
+                    )
+
+                if not blade_id:
+                    raise ValueError(
+                        "blade_id is required."
+                    )
+
+                profile = (
+                    self.job_manager.db
+                    .get_transition_profile(
+                        robot_id,
+                        blade_id,
+                    )
+                )
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            "actuator_extension_depth",
+                        "ok": True,
+                        "robot_id":
+                            robot_id,
+                        "blade_id":
+                            blade_id,
+                        "default_voltage":
+                            profile[
+                                "default_actuator_voltage"
+                            ],
+                        "override_voltage":
+                            profile[
+                                "override_actuator_voltage"
+                            ],
+                        "effective_voltage":
+                            profile[
+                                "effective_actuator_voltage"
+                            ],
+                        "has_override":
+                            profile[
+                                "actuator_voltage_has_override"
+                            ],
+                        "override_revision":
+                            profile[
+                                "actuator_voltage_override_revision"
+                            ],
+                        "override_updated_by":
+                            profile[
+                                "actuator_voltage_override_updated_by"
+                            ],
+                        "override_updated_at":
+                            profile[
+                                "actuator_voltage_override_updated_at"
+                            ],
+                    },
+                    request_id=request_id,
+                )
+
+                return True
+
+            if request_type in {
+                "save_actuator_extension_depth",
+                "restore_actuator_extension_depth",
+            }:
+                self._require_safe_manual_actuator_state(
+                    require_fresh_status=False
+                )
+
+                actor = self.validate_actor_initials(
+                    cmd
+                )
+
+                robot_id = str(
+                    cmd.get(
+                        "robot_id",
+                        "",
+                    )
+                ).strip()
+
+                blade_id = str(
+                    cmd.get(
+                        "blade_id",
+                        "",
+                    )
+                ).strip()
+
+                if not robot_id:
+                    raise ValueError(
+                        "robot_id is required."
+                    )
+
+                if not blade_id:
+                    raise ValueError(
+                        "blade_id is required."
+                    )
+
+                if (
+                    request_type
+                    == "save_actuator_extension_depth"
+                ):
+                    voltage = validate_extension_voltage(
+                        cmd.get("voltage")
+                    )
+
+                    persisted_profile = (
+                        self.job_manager.db
+                        .set_actuator_extension_override(
+                            robot_type_id=robot_id,
+                            blade_type_id=blade_id,
+                            voltage=voltage,
+                            actor=actor,
+                        )
+                    )
+
+                    response_type = (
+                        "actuator_extension_depth_saved"
+                    )
+
+                else:
+                    persisted_profile = (
+                        self.job_manager.db
+                        .clear_actuator_extension_override(
+                            robot_type_id=robot_id,
+                            blade_type_id=blade_id,
+                            actor=actor,
+                        )
+                    )
+
+                    response_type = (
+                        "actuator_extension_depth_restored"
+                    )
+
+                try:
+                    applied_profile = (
+                        await self.config_manager.apply(
+                            robot_id,
+                            blade_id,
+                        )
+                    )
+
+                except asyncio.CancelledError:
+                    raise
+
+                except Exception as apply_error:
+                    self.configuration_loaded_to_mcu = (
+                        False
+                    )
+
+                    self.configuration_apply_error = (
+                        "The actuator extension setting "
+                        "was persisted, but the complete "
+                        "runtime profile was not confirmed "
+                        "by H7: "
+                        f"{apply_error}"
+                    )
+
+                    self.startup_complete.clear()
+
+                    self.startup_error = (
+                        self.configuration_apply_error
+                    )
+
+                    self.logger.log.exception(
+                        "Actuator extension setting was "
+                        "persisted, but complete runtime "
+                        "configuration application failed."
+                    )
+
+                    await self.send_error(
+                        websocket,
+                        error=(
+                            "actuator_extension_runtime_apply_failed"
+                        ),
+                        message=(
+                            "The actuator extension setting "
+                            "was saved, but the robot "
+                            "controller did not confirm the "
+                            "complete runtime configuration. "
+                            "Process start remains blocked "
+                            "until the profile is reapplied."
+                        ),
+                        request_id=request_id,
+                        details={
+                            "persistence_succeeded":
+                                True,
+                            "runtime_apply_succeeded":
+                                False,
+                            "robot_id":
+                                robot_id,
+                            "blade_id":
+                                blade_id,
+                            "effective_voltage":
+                                persisted_profile[
+                                    "effective_actuator_voltage"
+                                ],
+                            "error":
+                                str(apply_error),
+                        },
+                    )
+
+                    return True
+
+                self.configuration_loaded_to_mcu = (
+                    True
+                )
+
+                self.configuration_apply_error = (
+                    None
+                )
+
+                if (
+                    self._feedforward_runtime_loaded
+                    and self._motor_direction_runtime_loaded
+                    and self.encoder_startup_ready
+                ):
+                    self.startup_error = None
+                    self.startup_complete.set()
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            response_type,
+                        "ok": True,
+                        "profile":
+                            applied_profile,
+                        "actuator_extension_transaction_id":
+                            applied_profile.get(
+                                "actuator_extension_transaction_id"
+                            ),
+                        "applied_voltage":
+                            applied_profile.get(
+                                "applied_actuator_voltage"
+                            ),
+                    },
+                    request_id=request_id,
+                )
+
+                return True
+
+            if (
+                request_type
+                == "preview_actuator_voltage"
+            ):
+                self._require_safe_manual_actuator_state(
+                    require_fresh_status=True
+                )
+
+                session_id = str(
+                    cmd.get(
+                        "preview_session_id",
+                        "",
+                    )
+                ).strip()
+
+                if (
+                    not session_id
+                    or len(session_id) > 48
+                ):
+                    raise ValueError(
+                        "A valid preview_session_id "
+                        "is required."
+                    )
+
+                channel = int(
+                    cmd.get(
+                        "channel",
+                        0,
+                    )
+                )
+
+                if channel != 0:
+                    raise ValueError(
+                        "Actuator preview is restricted "
+                        "to channel 0."
+                    )
+
+                voltage = validate_extension_voltage(
+                    cmd.get("voltage")
+                )
+
+                lease_ms = int(
+                    cmd.get(
+                        "lease_ms",
+                        250,
+                    )
+                )
+
+                if not 100 <= lease_ms <= 1000:
+                    raise ValueError(
+                        "lease_ms must be between "
+                        "100 and 1000."
+                    )
+
+                sequence = int(
+                    cmd.get(
+                        "seq",
+                        0,
+                    )
+                )
+
+                if sequence < 0:
+                    raise ValueError(
+                        "seq cannot be negative."
+                    )
+
+                loop = asyncio.get_running_loop()
+
+                await self.mcu_writes.put({
+                    "action":
+                        "preview_actuator_voltage",
+                    "preview_session_id":
+                        session_id,
+                    "channel":
+                        0,
+                    "voltage":
+                        voltage,
+                    "lease_ms":
+                        lease_ms,
+                    "seq":
+                        sequence,
+                    "_transient_motion":
+                        True,
+                    "_expires_monotonic": (
+                        loop.time()
+                        + lease_ms / 1000.0
+                    ),
+                })
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            "actuator_voltage_preview_accepted",
+                        "ok": True,
+                        "preview_session_id":
+                            session_id,
+                        "channel":
+                            0,
+                        "voltage":
+                            voltage,
+                        "lease_ms":
+                            lease_ms,
+                        "seq":
+                            sequence,
+                    },
+                    request_id=request_id,
+                )
+
+                return True
+
+            if (
+                request_type
+                == "stop_actuator_preview"
+            ):
+                session_id = str(
+                    cmd.get(
+                        "preview_session_id",
+                        "",
+                    )
+                ).strip()
+
+                if (
+                    not session_id
+                    or len(session_id) > 48
+                ):
+                    raise ValueError(
+                        "A valid preview_session_id "
+                        "is required."
+                    )
+
+                sequence = int(
+                    cmd.get(
+                        "seq",
+                        0,
+                    )
+                )
+
+                if sequence < 0:
+                    raise ValueError(
+                        "seq cannot be negative."
+                    )
+
+                command_queued = False
+
+                if self.h7_runtime_ready.is_set():
+                    await self.mcu_writes.put({
+                        "action":
+                            "stop_actuator_preview",
+                        "preview_session_id":
+                            session_id,
+                        "channel":
+                            0,
+                        "seq":
+                            sequence,
+                        "_transient_motion":
+                            True,
+                        "_expires_monotonic": (
+                            asyncio
+                            .get_running_loop()
+                            .time()
+                            + 0.5
+                        ),
+                    })
+
+                    command_queued = True
+
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            "actuator_voltage_preview_stopped",
+                        "ok": True,
+                        "preview_session_id":
+                            session_id,
+                        "channel":
+                            0,
+                        "seq":
+                            sequence,
+                        "command_queued":
+                            command_queued,
+                    },
+                    request_id=request_id,
+                )
+
+                return True
+
+            raise ValueError(
+                "Unsupported actuator extension request."
+            )
+
+        except asyncio.CancelledError:
+            raise
+
+        except asyncio.TimeoutError as error:
+            await self.send_error(
+                websocket,
+                error=(
+                    "actuator_extension_request_timeout"
+                ),
+                message=(
+                    "The robot controller did not "
+                    "confirm the actuator extension "
+                    "request before the timeout."
+                ),
+                request_id=request_id,
+                details=str(error),
+            )
+
+        except (
+            TypeError,
+            ValueError,
+            RuntimeError,
+        ) as error:
+            await self.send_error(
+                websocket,
+                error=(
+                    "actuator_extension_request_rejected"
+                ),
+                message=str(error),
+                request_id=request_id,
+            )
+
+        except Exception as error:
+            self.logger.log.exception(
+                "Actuator extension request failed."
+            )
+
+            await self.send_error(
+                websocket,
+                error=(
+                    "actuator_extension_request_failed"
+                ),
+                message=(
+                    "The actuator extension request "
+                    "could not be completed."
+                ),
+                request_id=request_id,
+                details=str(error),
+            )
+
+        return True
+
     async def handle_feedforward_request(
         self,
         websocket,
@@ -2391,6 +2947,12 @@ class WebsocketServer():
             return
 
         if await self.handle_feedforward_request(
+            websocket,
+            cmd,
+        ):
+            return
+
+        if await self.handle_actuator_extension_request(
             websocket,
             cmd,
         ):
@@ -3331,73 +3893,62 @@ class WebsocketServer():
             request_id = cmd.get("req_id")
 
             try:
-                channel = int(cmd.get("channel"))
-                voltage = float(cmd.get("voltage"))
+                channel = int(
+                    cmd.get("channel")
+                )
+
+                voltage = float(
+                    cmd.get("voltage")
+                )
 
                 if channel not in range(4):
                     raise ValueError(
-                        "Actuator channel must be between 0 and 3."
+                        "Actuator channel must be "
+                        "between 0 and 3."
                     )
 
                 if (
                     not math.isfinite(voltage)
                     or voltage < 0.0
-                    or voltage > 3.0
+                    or voltage > 5.0
                 ):
                     raise ValueError(
-                        "Actuator voltage must be between 0.0 and 3.0 V."
+                        "Actuator voltage must be "
+                        "between 0.0 and 5.0 V."
                     )
 
-                if not self.h7_runtime_ready.is_set():
-                    raise RuntimeError(
-                        "The H7 runtime is not ready."
-                    )
-
-                process = self.latest_process_status or {}
-
-                process_state = str(
-                    process.get("state", "unknown")
-                ).strip().lower()
-
-                if (
-                    process.get("active") is True
-                    or process_state not in {
-                        "stopped",
-                        "inactive",
-                        "idle",
-                    }
-                ):
-                    raise RuntimeError(
-                        "The robot process must be confirmed stopped."
-                    )
-
-                if self.service_runtime._active_run_id is not None:
-                    raise RuntimeError(
-                        "Manual actuator control is blocked "
-                        "while a diagnostic is running."
-                    )
-
-                if self.diagnostic_plan_runtime.active:
-                    raise RuntimeError(
-                        "Manual actuator control is blocked "
-                        "while the Full System Check is running."
-                    )
+                self._require_safe_manual_actuator_state(
+                    require_fresh_status=True
+                )
 
                 await self.mcu_writes.put({
-                    "action": "set_voltage",
-                    "channel": channel,
-                    "voltage": voltage,
-                    "_transient_motion": True,
+                    "action":
+                        "set_voltage",
+                    "channel":
+                        channel,
+                    "voltage":
+                        voltage,
+                    "_transient_motion":
+                        True,
+                    "_expires_monotonic": (
+                        asyncio
+                        .get_running_loop()
+                        .time()
+                        + 0.5
+                    ),
                 })
 
                 if request_id is not None:
                     await self.send_response(
                         websocket,
                         {
-                            "type": "actuator_voltage_accepted",
+                            "type":
+                                "actuator_voltage_accepted",
                             "ok": True,
-                            "channel": channel,
-                            "voltage": voltage,
+                            "channel":
+                                channel,
+                            "voltage":
+                                voltage,
                         },
                         request_id=request_id,
                     )
@@ -3410,7 +3961,9 @@ class WebsocketServer():
                 if request_id is not None:
                     await self.send_error(
                         websocket,
-                        error="manual_actuator_command_rejected",
+                        error=(
+                            "manual_actuator_command_rejected"
+                        ),
                         message=str(error),
                         request_id=request_id,
                     )
@@ -3418,6 +3971,25 @@ class WebsocketServer():
                     self.logger.log.warning(
                         "Manual actuator command rejected: "
                         f"{error}"
+                    )
+
+            except Exception as error:
+                self.logger.log.exception(
+                    "Manual actuator command failed."
+                )
+
+                if request_id is not None:
+                    await self.send_error(
+                        websocket,
+                        error=(
+                            "manual_actuator_command_failed"
+                        ),
+                        message=(
+                            "The manual actuator command "
+                            "could not be completed."
+                        ),
+                        request_id=request_id,
+                        details=str(error),
                     )
 
             return
@@ -4139,6 +4711,84 @@ class WebsocketServer():
 
             return
 
+        # ==========================================================
+        # Actuator status
+        # ==========================================================
+
+        if t == "get_actuator_status":
+            if self.latest_actuator_status is not None:
+                await websocket.send(
+                    json.dumps({
+                        "response": (
+                            self.latest_actuator_status
+                        ),
+                    })
+                )
+
+            await self.mcu_writes.put({
+                "action": "get_actuator_status",
+            })
+            return
+
+        # ==========================================================
+        # Health and firmware
+        # ==========================================================
+
+        if t == "get_health":
+            await self.responses.put(
+                self.latest_health
+                or {
+                    "type": "health",
+                    "state": "unknown",
+                    "sources": [],
+                    "ts": None,
+                    "boot": None,
+                    "andon": None,
+                    "firmware": None,
+                }
+            )
+            return
+
+        if t == "get_firmware":
+            await self.mcu_writes.put({
+                "action": "get_firmware",
+            })
+
+            await self.responses.put({
+                "type": "ack",
+                "ok": True,
+                "info": "firmware_refresh_requested",
+            })
+            return
+
+        # ==========================================================
+        # Module information and testing
+        # ==========================================================
+
+        if t == "get_modules":
+            await self.responses.put({
+                "type": "modules",
+                "items": MODULES,
+            })
+            return
+
+        # ==========================================================
+        # Unhandled commands
+        # ==========================================================
+
+        # Preserve the existing behavior for commands handled by
+        # another application component.
+        if cmd.get("req_id") is not None:
+            await self.send_error(
+                websocket,
+                error="unsupported_request",
+                message=f"Unsupported request type: {t or action or 'unknown'}",
+                request_id=cmd.get("req_id"),
+            )
+            return
+
+        await self.commands.put(cmd)
+
     async def _commit_drive_direction_configuration(
         self,
         *,
@@ -4274,85 +4924,6 @@ class WebsocketServer():
             },
             request_id=cmd.get("req_id"),
         )
-
-
-        # ==========================================================
-        # Actuator status
-        # ==========================================================
-
-        if t == "get_actuator_status":
-            if self.latest_actuator_status is not None:
-                await websocket.send(
-                    json.dumps({
-                        "response": (
-                            self.latest_actuator_status
-                        ),
-                    })
-                )
-
-            await self.mcu_writes.put({
-                "action": "get_actuator_status",
-            })
-            return
-
-        # ==========================================================
-        # Health and firmware
-        # ==========================================================
-
-        if t == "get_health":
-            await self.responses.put(
-                self.latest_health
-                or {
-                    "type": "health",
-                    "state": "unknown",
-                    "sources": [],
-                    "ts": None,
-                    "boot": None,
-                    "andon": None,
-                    "firmware": None,
-                }
-            )
-            return
-
-        if t == "get_firmware":
-            await self.mcu_writes.put({
-                "action": "get_firmware",
-            })
-
-            await self.responses.put({
-                "type": "ack",
-                "ok": True,
-                "info": "firmware_refresh_requested",
-            })
-            return
-
-        # ==========================================================
-        # Module information and testing
-        # ==========================================================
-
-        if t == "get_modules":
-            await self.responses.put({
-                "type": "modules",
-                "items": MODULES,
-            })
-            return
-
-        # ==========================================================
-        # Unhandled commands
-        # ==========================================================
-
-        # Preserve the existing behavior for commands handled by
-        # another application component.
-        if cmd.get("req_id") is not None:
-            await self.send_error(
-                websocket,
-                error="unsupported_request",
-                message=f"Unsupported request type: {t or action or 'unknown'}",
-                request_id=cmd.get("req_id"),
-            )
-            return
-
-        await self.commands.put(cmd)
 
 
     async def response_producer(self, websocket):
@@ -4727,61 +5298,370 @@ class WebsocketServer():
             return acknowledgement
 
     @staticmethod
-    def normalize_trigger_for_mcu(trig: Dict[str, Any], *, default_delay_s: Optional[float] = None) -> Dict[str, Any]:
+    def normalize_trigger_for_mcu(
+        trig: Dict[str, Any],
+        *,
+        default_delay_s: Optional[
+            float
+        ] = None,
+    ) -> Dict[str, Any]:
         """
-        Normalize one trigger into the MCU's expected schema:
-          - threshold: int
-          - activate: int
-          - deactivate: int
-          - delay: float (seconds)
-        Supports input with 'delay_ms' or 'delay'. If both absent, uses default_delay_s (if provided).
+        Normalize one trigger into the schema expected
+        by the H7.
+
+        Required fields:
+
+        - threshold: int
+        - activate: int
+        - deactivate: int
+        - delay: float seconds
+
+        Optional fields:
+
+        - hold_active: bool
+
+        A one-transition profile uses hold_active=True
+        so its only actuator channel is not immediately
+        deactivated after activation.
         """
+        if not isinstance(
+            trig,
+            dict,
+        ):
+            raise ValueError(
+                "Trigger must be a dictionary."
+            )
+
         out: Dict[str, Any] = {}
 
-        # Pass-through numeric fields (raise early if missing)
-        required_int_fields = ["threshold", "activate", "deactivate"]
-        for f in required_int_fields:
-            if f not in trig:
-                raise ValueError(f"Trigger missing required field '{f}'")
-            out[f] = int(trig[f])
+        required_int_fields = [
+            "threshold",
+            "activate",
+            "deactivate",
+        ]
 
-        # Delay handling
+        for field in required_int_fields:
+            if field not in trig:
+                raise ValueError(
+                    "Trigger missing required field "
+                    f"'{field}'."
+                )
+
+            raw_value = trig[
+                field
+            ]
+
+            if isinstance(
+                raw_value,
+                bool,
+            ):
+                raise ValueError(
+                    f"Trigger field '{field}' "
+                    "must be an integer."
+                )
+
+            try:
+                value = int(
+                    raw_value
+                )
+            except (
+                TypeError,
+                ValueError,
+                OverflowError,
+            ) as error:
+                raise ValueError(
+                    f"Trigger field '{field}' "
+                    "must be an integer."
+                ) from error
+
+            out[
+                field
+            ] = value
+
         if "delay_ms" in trig:
-            out["delay"] = float(trig["delay_ms"]) / 1000.0
+            raw_delay = trig[
+                "delay_ms"
+            ]
+
+            if isinstance(
+                raw_delay,
+                bool,
+            ):
+                raise ValueError(
+                    "Trigger field 'delay_ms' "
+                    "must be numeric."
+                )
+
+            try:
+                out[
+                    "delay"
+                ] = (
+                    float(
+                        raw_delay
+                    )
+                    / 1000.0
+                )
+            except (
+                TypeError,
+                ValueError,
+                OverflowError,
+            ) as error:
+                raise ValueError(
+                    "Trigger field 'delay_ms' "
+                    "must be numeric."
+                ) from error
+
         elif "delay" in trig:
-            # Assume caller is already providing seconds
-            out["delay"] = float(trig["delay"])
+            raw_delay = trig[
+                "delay"
+            ]
+
+            if isinstance(
+                raw_delay,
+                bool,
+            ):
+                raise ValueError(
+                    "Trigger field 'delay' "
+                    "must be numeric."
+                )
+
+            try:
+                out[
+                    "delay"
+                ] = float(
+                    raw_delay
+                )
+            except (
+                TypeError,
+                ValueError,
+                OverflowError,
+            ) as error:
+                raise ValueError(
+                    "Trigger field 'delay' "
+                    "must be numeric."
+                ) from error
+
         elif default_delay_s is not None:
-            out["delay"] = float(default_delay_s)
+            if isinstance(
+                default_delay_s,
+                bool,
+            ):
+                raise ValueError(
+                    "Default trigger delay "
+                    "must be numeric."
+                )
+
+            out[
+                "delay"
+            ] = float(
+                default_delay_s
+            )
+
         else:
-            raise ValueError("Trigger missing 'delay'/'delay_ms' and no default provided")
+            raise ValueError(
+                "Trigger missing 'delay' or "
+                "'delay_ms' and no default "
+                "was provided."
+            )
+
+        raw_hold_active = trig.get(
+            "hold_active",
+            False,
+        )
+
+        if not isinstance(
+            raw_hold_active,
+            bool,
+        ):
+            raise ValueError(
+                "Trigger field 'hold_active' "
+                "must be true or false."
+            )
+
+        out[
+            "hold_active"
+        ] = raw_hold_active
 
         return out
 
     @staticmethod
-    def validate_trigger_for_mcu(trig: Dict[str, Any], channel_count: Optional[int] = None) -> Tuple[bool, Optional[str]]:
+    def validate_trigger_for_mcu(
+        trig: Dict[str, Any],
+        channel_count: Optional[
+            int
+        ] = None,
+    ) -> Tuple[
+        bool,
+        Optional[str],
+    ]:
         """
-        Validate ranges and presence for a normalized MCU trigger (expects 'delay' in seconds).
-        Returns (ok, error_message).
+        Validate a normalized H7 trigger.
+
+        The trigger is expected to contain delay in
+        seconds and an explicit hold_active Boolean.
         """
-        # Basic checks
-        if trig.get("threshold") is None or trig.get("activate") is None or trig.get("deactivate") is None or trig.get("delay") is None:
-            return False, "Missing one or more required fields"
+        if not isinstance(
+            trig,
+            dict,
+        ):
+            return (
+                False,
+                "Trigger must be a dictionary",
+            )
 
-        # Non-negative values
-        if trig["threshold"] < 0:
-            return False, "threshold must be >= 0"
-        if trig["delay"] < 0:
-            return False, "delay must be >= 0 seconds"
+        required_fields = [
+            "threshold",
+            "activate",
+            "deactivate",
+            "delay",
+            "hold_active",
+        ]
 
-        # Channel bounds if known
+        for field in required_fields:
+            if field not in trig:
+                return (
+                    False,
+                    "Missing required trigger "
+                    f"field: {field}",
+                )
+
+        threshold = trig[
+            "threshold"
+        ]
+
+        activate = trig[
+            "activate"
+        ]
+
+        deactivate = trig[
+            "deactivate"
+        ]
+
+        delay = trig[
+            "delay"
+        ]
+
+        hold_active = trig[
+            "hold_active"
+        ]
+
+        if (
+            isinstance(
+                threshold,
+                bool,
+            )
+            or not isinstance(
+                threshold,
+                int,
+            )
+        ):
+            return (
+                False,
+                "threshold must be an integer",
+            )
+
+        if (
+            isinstance(
+                activate,
+                bool,
+            )
+            or not isinstance(
+                activate,
+                int,
+            )
+        ):
+            return (
+                False,
+                "activate must be an integer",
+            )
+
+        if (
+            isinstance(
+                deactivate,
+                bool,
+            )
+            or not isinstance(
+                deactivate,
+                int,
+            )
+        ):
+            return (
+                False,
+                "deactivate must be an integer",
+            )
+
+        if (
+            isinstance(
+                delay,
+                bool,
+            )
+            or not isinstance(
+                delay,
+                (
+                    int,
+                    float,
+                ),
+            )
+        ):
+            return (
+                False,
+                "delay must be numeric",
+            )
+
+        if not isinstance(
+            hold_active,
+            bool,
+        ):
+            return (
+                False,
+                "hold_active must be true or false",
+            )
+
+        if threshold < 0:
+            return (
+                False,
+                "threshold must be >= 0",
+            )
+
+        if delay < 0:
+            return (
+                False,
+                "delay must be >= 0 seconds",
+            )
+
         if channel_count is not None:
-            if not (0 <= trig["activate"] < channel_count):
-                return False, f"activate={trig['activate']} out of range [0, {channel_count-1}]"
-            if not (0 <= trig["deactivate"] < channel_count):
-                return False, f"deactivate={trig['deactivate']} out of range [0, {channel_count-1}]"
+            if channel_count < 1:
+                return (
+                    False,
+                    "channel_count must be at least 1",
+                )
 
-        return True, None
+            if not (
+                0
+                <= activate
+                < channel_count
+            ):
+                return (
+                    False,
+                    f"activate={activate} out of "
+                    f"range [0, {channel_count - 1}]",
+                )
+
+            if not (
+                0
+                <= deactivate
+                < channel_count
+            ):
+                return (
+                    False,
+                    f"deactivate={deactivate} out of "
+                    f"range [0, {channel_count - 1}]",
+                )
+
+        return (
+            True,
+            None,
+        )
 
     async def drain_trigger_acks(self) -> None:
         while True:
@@ -4789,6 +5669,144 @@ class WebsocketServer():
                 self.trigger_acks.get_nowait()
             except asyncio.QueueEmpty:
                 break
+
+    def _require_safe_manual_actuator_state(
+        self,
+        *,
+        require_fresh_status: bool,
+    ) -> Dict[str, Any]:
+        """
+        Validate CM5-side preconditions for manual actuator output.
+
+        The H7 remains responsible for authoritative interlock,
+        E-stop, communication timeout, lease, and hardware-fault
+        enforcement.
+        """
+        if not self.h7_runtime_ready.is_set():
+            raise RuntimeError(
+                "The H7 runtime is not ready."
+            )
+
+        process = (
+            self.latest_process_status
+            if isinstance(
+                self.latest_process_status,
+                dict,
+            )
+            else {}
+        )
+
+        process_state = str(
+            process.get(
+                "state",
+                "unknown",
+            )
+        ).strip().lower()
+
+        process_confirmed_stopped = (
+            process.get("active") is False
+            and process_state in {
+                "stopped",
+                "inactive",
+                "idle",
+            }
+        )
+
+        if not process_confirmed_stopped:
+            raise RuntimeError(
+                "The robot process must be confirmed stopped."
+            )
+
+        if (
+            self.service_runtime._active_run_id
+            is not None
+        ):
+            raise RuntimeError(
+                "Manual actuator control is blocked "
+                "while a diagnostic is running."
+            )
+
+        if self.diagnostic_plan_runtime.active:
+            raise RuntimeError(
+                "Manual actuator control is blocked "
+                "while the Full System Check is running."
+            )
+
+        actuator_status = (
+            self.latest_actuator_status
+            if isinstance(
+                self.latest_actuator_status,
+                dict,
+            )
+            else None
+        )
+
+        if not require_fresh_status:
+            return (
+                dict(actuator_status)
+                if actuator_status is not None
+                else {}
+            )
+
+        received_at = (
+            self._latest_actuator_status_received_monotonic
+        )
+
+        if (
+            actuator_status is None
+            or received_at is None
+        ):
+            raise RuntimeError(
+                "Fresh actuator status is unavailable."
+            )
+
+        age_s = (
+            asyncio.get_running_loop().time()
+            - received_at
+        )
+
+        if (
+            age_s < 0.0
+            or age_s
+            > self._actuator_status_freshness_limit_s
+        ):
+            raise RuntimeError(
+                "Actuator status is stale."
+            )
+
+        try:
+            jam_mask = int(
+                actuator_status.get(
+                    "jam_mask",
+                    0,
+                )
+            )
+        except (
+            TypeError,
+            ValueError,
+        ) as error:
+            raise RuntimeError(
+                "Actuator fault status is invalid."
+            ) from error
+
+        if jam_mask != 0:
+            raise RuntimeError(
+                "Manual actuator control is blocked "
+                "because an actuator jam is active."
+            )
+
+        if (
+            actuator_status.get("pcb_fault")
+            is True
+        ):
+            raise RuntimeError(
+                "Manual actuator control is blocked "
+                "because the actuator PCB reports a fault."
+            )
+
+        return dict(
+            actuator_status
+        )
 
     def _process_is_confirmed_active(self) -> bool:
         status = self.latest_process_status
@@ -4992,6 +6010,17 @@ class WebsocketServer():
                 )
 
             normalized_triggers.append(trigger)
+
+            self.logger.log.info(
+                "Normalized H7 trigger: "
+                f"index={index} "
+                f"threshold={trigger['threshold']} "
+                f"activate={trigger['activate']} "
+                f"deactivate={trigger['deactivate']} "
+                f"delay={trigger['delay']} "
+                f"hold_active="
+                f"{trigger['hold_active']}"
+            )
 
         await self.drain_trigger_acks()
 

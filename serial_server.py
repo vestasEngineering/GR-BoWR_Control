@@ -31,6 +31,7 @@ class SerialServer:
         self.feedforward_acks = queues.feedforward_acks
         self.motor_direction_acks = queues.motor_direction_acks
         self.process_start_acks = queues.process_start_acks
+        self.actuator_extension_acks = queues.actuator_extension_acks
         self.drive_direction_acks = queues.drive_direction_acks
         self.drive_direction_test_acks = queues.drive_direction_test_acks
         self.drive_direction_test_results = queues.drive_direction_test_results
@@ -778,6 +779,10 @@ class SerialServer:
 
                     elif msg_dict.get("type") in ("encoder_reset", "encoder_set"):
                         await self.encoder_acks.put(msg_dict)
+                        await self.mcu_reads.put(msg_dict)
+
+                    elif msg_dict.get("type") == "transition_actuator_voltage_ack":
+                        await self.actuator_extension_acks.put(msg_dict)
                         await self.mcu_reads.put(msg_dict)
 
                     elif (

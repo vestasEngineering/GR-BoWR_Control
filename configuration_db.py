@@ -65,6 +65,11 @@ class ConfigurationDatabaseMixin:
                     blade_type_id TEXT NOT NULL,
                     default_values_json TEXT NOT NULL,
                     override_values_json TEXT,
+                    default_actuator_voltage REAL NOT NULL DEFAULT 4.4,
+                    override_actuator_voltage REAL,
+                    actuator_voltage_override_revision INTEGER NOT NULL DEFAULT 0,
+                    actuator_voltage_override_updated_by TEXT,
+                    actuator_voltage_override_updated_at TEXT,
                     default_revision INTEGER NOT NULL DEFAULT 1,
                     override_revision INTEGER NOT NULL DEFAULT 0,
                     default_source TEXT NOT NULL DEFAULT 'factory',
@@ -88,6 +93,7 @@ class ConfigurationDatabaseMixin:
                     applied_profile_id INTEGER,
                     applied_source TEXT,
                     applied_values_json TEXT,
+                    applied_actuator_voltage REAL,
                     applied_at TEXT,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY (selected_robot_type_id) REFERENCES robot_types(id),
@@ -440,7 +446,238 @@ class ConfigurationDatabaseMixin:
             "override_revision": row["override_revision"],
             "override_updated_by": row["override_updated_by"],
             "override_updated_at": row["override_updated_at"],
+            "default_actuator_voltage": float(row["default_actuator_voltage"]),
+            "override_actuator_voltage": (
+                float(row["override_actuator_voltage"])
+                if row["override_actuator_voltage"] is not None else None
+            ),
+            "effective_actuator_voltage": float(
+                row["override_actuator_voltage"]
+                if row["override_actuator_voltage"] is not None
+                else row["default_actuator_voltage"]
+            ),
+            "actuator_voltage_has_override": row["override_actuator_voltage"] is not None,
+            "actuator_voltage_override_revision": int(row["actuator_voltage_override_revision"]),
+            "actuator_voltage_override_updated_by": row["actuator_voltage_override_updated_by"],
+            "actuator_voltage_override_updated_at": row["actuator_voltage_override_updated_at"],
         }
+
+
+    def set_actuator_extension_override(
+        self,
+        *,
+        robot_type_id: str,
+        blade_type_id: str,
+        voltage: Any,
+        actor: str,
+    ) -> Dict[str, Any]:
+        from actuator_extension_depth import validate_extension_voltage
+        import re
+
+        robot_type_id = str(robot_type_id).strip()
+        blade_type_id = str(blade_type_id).strip()
+        actor = str(actor).strip().upper()
+
+        if not robot_type_id:
+            raise ValueError("robot_type_id is required.")
+
+        if not blade_type_id:
+            raise ValueError("blade_type_id is required.")
+
+        if not re.fullmatch(r"[A-Z]{2,6}", actor):
+            raise ValueError(
+                "actor_initials must contain 2 to 6 letters."
+            )
+
+        clean_voltage = validate_extension_voltage(voltage)
+        now = self._config_utc_now()
+
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+
+                row = self.conn.execute(
+                    """
+                    SELECT
+                        override_actuator_voltage
+                    FROM transition_profiles
+                    WHERE robot_type_id = ?
+                    AND blade_type_id = ?
+                    """,
+                    (
+                        robot_type_id,
+                        blade_type_id,
+                    ),
+                ).fetchone()
+
+                if row is None:
+                    raise ValueError("Transition profile not found.")
+
+                before = (
+                    float(row["override_actuator_voltage"])
+                    if row["override_actuator_voltage"] is not None
+                    else None
+                )
+
+                cursor = self.conn.execute(
+                    """
+                    UPDATE transition_profiles
+                    SET
+                        override_actuator_voltage = ?,
+                        actuator_voltage_override_revision =
+                            actuator_voltage_override_revision + 1,
+                        actuator_voltage_override_updated_by = ?,
+                        actuator_voltage_override_updated_at = ?,
+                        updated_at = ?
+                    WHERE robot_type_id = ?
+                    AND blade_type_id = ?
+                    """,
+                    (
+                        clean_voltage,
+                        actor,
+                        now,
+                        now,
+                        robot_type_id,
+                        blade_type_id,
+                    ),
+                )
+
+                if cursor.rowcount != 1:
+                    raise RuntimeError(
+                        "Actuator extension override was not updated."
+                    )
+
+                self._insert_configuration_event_locked(
+                    "actuator_extension_override_saved",
+                    robot_type_id,
+                    blade_type_id,
+                    actor=actor,
+                    source="admin_hmi",
+                    before=before,
+                    after=clean_voltage,
+                    details={
+                        "identity_type": "self_entered_vestas_initials",
+                        "authorization_role": "admin",
+                    },
+                )
+
+                self.conn.commit()
+
+            except Exception:
+                self.conn.rollback()
+                raise
+
+        return self.get_transition_profile(
+            robot_type_id,
+            blade_type_id,
+        )
+
+
+    def clear_actuator_extension_override(
+        self,
+        *,
+        robot_type_id: str,
+        blade_type_id: str,
+        actor: str,
+    ) -> Dict[str, Any]:
+        import re
+
+        robot_type_id = str(robot_type_id).strip()
+        blade_type_id = str(blade_type_id).strip()
+        actor = str(actor).strip().upper()
+
+        if not robot_type_id:
+            raise ValueError("robot_type_id is required.")
+
+        if not blade_type_id:
+            raise ValueError("blade_type_id is required.")
+
+        if not re.fullmatch(r"[A-Z]{2,6}", actor):
+            raise ValueError(
+                "actor_initials must contain 2 to 6 letters."
+            )
+
+        now = self._config_utc_now()
+
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+
+                row = self.conn.execute(
+                    """
+                    SELECT
+                        override_actuator_voltage
+                    FROM transition_profiles
+                    WHERE robot_type_id = ?
+                    AND blade_type_id = ?
+                    """,
+                    (
+                        robot_type_id,
+                        blade_type_id,
+                    ),
+                ).fetchone()
+
+                if row is None:
+                    raise ValueError("Transition profile not found.")
+
+                before = (
+                    float(row["override_actuator_voltage"])
+                    if row["override_actuator_voltage"] is not None
+                    else None
+                )
+
+                cursor = self.conn.execute(
+                    """
+                    UPDATE transition_profiles
+                    SET
+                        override_actuator_voltage = NULL,
+                        actuator_voltage_override_revision =
+                            actuator_voltage_override_revision + 1,
+                        actuator_voltage_override_updated_by = ?,
+                        actuator_voltage_override_updated_at = ?,
+                        updated_at = ?
+                    WHERE robot_type_id = ?
+                    AND blade_type_id = ?
+                    """,
+                    (
+                        actor,
+                        now,
+                        now,
+                        robot_type_id,
+                        blade_type_id,
+                    ),
+                )
+
+                if cursor.rowcount != 1:
+                    raise RuntimeError(
+                        "Actuator extension override was not cleared."
+                    )
+
+                self._insert_configuration_event_locked(
+                    "actuator_extension_override_cleared",
+                    robot_type_id,
+                    blade_type_id,
+                    actor=actor,
+                    source="factory_default",
+                    before=before,
+                    after=None,
+                    details={
+                        "identity_type": "self_entered_vests_initials",
+                        "authorization_role": "admin",
+                    },
+                )
+
+                self.conn.commit()
+
+            except Exception:
+                self.conn.rollback()
+                raise
+
+        return self.get_transition_profile(
+            robot_type_id,
+            blade_type_id,
+        )
+
 
     def save_motor_directions(
         self,
@@ -697,35 +934,151 @@ class ConfigurationDatabaseMixin:
             )
             self.conn.commit()
 
-    def mark_profile_applied(self, profile: Dict[str, Any]) -> None:
+    def mark_profile_applied(
+        self,
+        profile: Dict[str, Any],
+    ) -> None:
+        """
+        Record the complete transition profile confirmed as applied to H7.
+
+        The caller must invoke this method only after both the actuator
+        extension voltage acknowledgement and trigger reconciliation
+        acknowledgement succeed.
+        """
         now = self._config_utc_now()
+
+        effective_voltage = float(
+            profile["effective_actuator_voltage"]
+        )
+
         with self._lock:
-            self.conn.execute(
-                """
-                UPDATE configuration_state SET
-                    selected_robot_type_id=?, selected_blade_type_id=?,
-                    applied_profile_id=?, applied_source=?, applied_values_json=?,
-                    applied_at=?, updated_at=? WHERE id=1
-                """,
-                (profile["robot_type_id"], profile["blade_type_id"], profile["profile_id"],
-                 profile["effective_source"], self._json_dumps(profile["effective_values"]), now, now),
-            )
-            self._insert_configuration_event_locked(
-                "transition_profile_applied", profile["robot_type_id"], profile["blade_type_id"],
-                actor="system", source=profile["effective_source"], before=None,
-                after=profile["effective_values"],
-            )
-            self.conn.commit()
+            try:
+                self.conn.execute(
+                    "BEGIN IMMEDIATE"
+                )
+
+                previous = self.conn.execute(
+                    """
+                    SELECT
+                        applied_profile_id,
+                        applied_source,
+                        applied_values_json,
+                        applied_actuator_voltage,
+                        applied_at
+                    FROM configuration_state
+                    WHERE id = 1
+                    """
+                ).fetchone()
+
+                cursor = self.conn.execute(
+                    """
+                    UPDATE configuration_state
+                    SET
+                        selected_robot_type_id = ?,
+                        selected_blade_type_id = ?,
+                        applied_profile_id = ?,
+                        applied_source = ?,
+                        applied_values_json = ?,
+                        applied_actuator_voltage = ?,
+                        applied_at = ?,
+                        updated_at = ?
+                    WHERE id = 1
+                    """,
+                    (
+                        profile["robot_type_id"],
+                        profile["blade_type_id"],
+                        profile["profile_id"],
+                        profile["effective_source"],
+                        self._json_dumps(
+                            profile["effective_values"]
+                        ),
+                        effective_voltage,
+                        now,
+                        now,
+                    ),
+                )
+
+                if cursor.rowcount != 1:
+                    raise RuntimeError(
+                        "Applied configuration state was not updated."
+                    )
+
+                before = None
+
+                if previous is not None:
+                    before = {
+                        "profile_id":
+                            previous["applied_profile_id"],
+                        "source":
+                            previous["applied_source"],
+                        "values":
+                            self._json_loads(
+                                previous[
+                                    "applied_values_json"
+                                ],
+                                None,
+                            ),
+                        "actuator_voltage":
+                            previous[
+                                "applied_actuator_voltage"
+                            ],
+                        "applied_at":
+                            previous["applied_at"],
+                    }
+
+                after = {
+                    "profile_id":
+                        profile["profile_id"],
+                    "source":
+                        profile["effective_source"],
+                    "values":
+                        list(
+                            profile["effective_values"]
+                        ),
+                    "actuator_voltage":
+                        effective_voltage,
+                    "applied_at":
+                        now,
+                }
+
+                self._insert_configuration_event_locked(
+                    "transition_profile_applied",
+                    profile["robot_type_id"],
+                    profile["blade_type_id"],
+                    actor="system",
+                    source=profile["effective_source"],
+                    before=before,
+                    after=after,
+                    details={
+                        "actuator_voltage_source": (
+                            "operator_override"
+                            if profile[
+                                "actuator_voltage_has_override"
+                            ]
+                            else "factory_default"
+                        ),
+                        "actuator_voltage_override_revision":
+                            profile[
+                                "actuator_voltage_override_revision"
+                            ],
+                    },
+                )
+
+                self.conn.commit()
+
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def get_applied_transition_profile_snapshot(
         self,
     ) -> Optional[Dict[str, Any]]:
         """
-        Return the transition values last recorded as applied to the H7.
+        Return the transition values and actuator voltage last confirmed
+        as applied to H7.
 
-        This reads configuration_state.applied_values_json rather than the
-        currently selected or edited profile. The Control HMI must display
-        what was applied, not what an administrator is viewing or editing.
+        This does not return a currently edited profile unless that profile
+        was successfully acknowledged and marked applied.
         """
         with self._lock:
             row = self.conn.execute(
@@ -736,13 +1089,17 @@ class ConfigurationDatabaseMixin:
                     selected_blade_type_id,
                     applied_source,
                     applied_values_json,
+                    applied_actuator_voltage,
                     applied_at
                 FROM configuration_state
                 WHERE id = 1
                 """
             ).fetchone()
 
-        if row is None or row["applied_profile_id"] is None:
+        if (
+            row is None
+            or row["applied_profile_id"] is None
+        ):
             return None
 
         values = self._json_loads(
@@ -755,15 +1112,31 @@ class ConfigurationDatabaseMixin:
             8,
         )
 
-        return {
-            "profile_id": int(row["applied_profile_id"]),
-            "robot_id": row["selected_robot_type_id"],
-            "blade_id": row["selected_blade_type_id"],
-            "effective_source": row["applied_source"],
-            "transition_values": clean_values,
-            "applied_at": row["applied_at"],
-        }
+        applied_voltage = (
+            float(
+                row["applied_actuator_voltage"]
+            )
+            if row["applied_actuator_voltage"]
+            is not None
+            else None
+        )
 
+        return {
+            "profile_id":
+                int(row["applied_profile_id"]),
+            "robot_id":
+                row["selected_robot_type_id"],
+            "blade_id":
+                row["selected_blade_type_id"],
+            "effective_source":
+                row["applied_source"],
+            "transition_values":
+                clean_values,
+            "actuator_extension_voltage":
+                applied_voltage,
+            "applied_at":
+                row["applied_at"],
+        }
 
     def _insert_configuration_event_locked(self, event_type: str, robot_type_id: Optional[str],
                                            blade_type_id: Optional[str], *, actor: Optional[str],
@@ -963,6 +1336,11 @@ class ConfigurationDatabaseMixin:
                             blade_type_id,
                             default_values_json,
                             override_values_json,
+                            default_actuator_voltage,
+                            override_actuator_voltage,
+                            actuator_voltage_override_revision,
+                            actuator_voltage_override_updated_by,
+                            actuator_voltage_override_updated_at,
                             default_revision,
                             override_revision,
                             default_source,
@@ -973,19 +1351,21 @@ class ConfigurationDatabaseMixin:
                         )
                         VALUES (
                             ?, ?, ?, NULL,
+                            ?, NULL, 0, NULL, NULL,
                             1, 0, ?,
                             NULL, NULL,
                             ?, ?
                         )
                         """,
                         (
-                            profile[
-                                "robot_type_id"
-                            ],
+                            profile["robot_type_id"],
                             blade_id,
-                            profile[
-                                "default_values_json"
-                            ],
+                            profile["default_values_json"],
+                            float(
+                                profile[
+                                    "default_actuator_voltage"
+                                ]
+                            ),
                             (
                                 "copied_from:"
                                 f"{copy_from_blade_id}"
@@ -1463,28 +1843,120 @@ class ConfigurationDatabaseMixin:
     def migrate_configuration_tables(
         self,
     ) -> None:
-        with self._lock:
-            columns = {
-                row["name"]
-                for row in self.conn.execute(
-                    """
-                    PRAGMA table_info(
-                        blade_types
-                    )
-                    """
-                ).fetchall()
-            }
+        """
+        Idempotently add configuration columns introduced after the
+        original configuration schema.
 
-            if "source" not in columns:
+        SQLite does not support ADD COLUMN IF NOT EXISTS, so each column
+        is checked through PRAGMA table_info before it is added.
+        """
+        with self._lock:
+            try:
                 self.conn.execute(
-                    """
-                    ALTER TABLE blade_types
-                    ADD COLUMN source TEXT
-                    NOT NULL DEFAULT 'factory'
-                    """
+                    "BEGIN IMMEDIATE"
                 )
 
-            self.conn.commit()
+                blade_columns = {
+                    row["name"]
+                    for row in self.conn.execute(
+                        """
+                        PRAGMA table_info(
+                            blade_types
+                        )
+                        """
+                    ).fetchall()
+                }
+
+                if "source" not in blade_columns:
+                    self.conn.execute(
+                        """
+                        ALTER TABLE blade_types
+                        ADD COLUMN source TEXT
+                        NOT NULL DEFAULT 'factory'
+                        """
+                    )
+
+                profile_columns = {
+                    row["name"]
+                    for row in self.conn.execute(
+                        """
+                        PRAGMA table_info(
+                            transition_profiles
+                        )
+                        """
+                    ).fetchall()
+                }
+
+                profile_migrations = (
+                    (
+                        "default_actuator_voltage",
+                        """
+                        ALTER TABLE transition_profiles
+                        ADD COLUMN default_actuator_voltage REAL
+                        NOT NULL DEFAULT 4.4
+                        """,
+                    ),
+                    (
+                        "override_actuator_voltage",
+                        """
+                        ALTER TABLE transition_profiles
+                        ADD COLUMN override_actuator_voltage REAL
+                        """,
+                    ),
+                    (
+                        "actuator_voltage_override_revision",
+                        """
+                        ALTER TABLE transition_profiles
+                        ADD COLUMN actuator_voltage_override_revision
+                        INTEGER NOT NULL DEFAULT 0
+                        """,
+                    ),
+                    (
+                        "actuator_voltage_override_updated_by",
+                        """
+                        ALTER TABLE transition_profiles
+                        ADD COLUMN actuator_voltage_override_updated_by
+                        TEXT
+                        """,
+                    ),
+                    (
+                        "actuator_voltage_override_updated_at",
+                        """
+                        ALTER TABLE transition_profiles
+                        ADD COLUMN actuator_voltage_override_updated_at
+                        TEXT
+                        """,
+                    ),
+                )
+
+                for column_name, sql in profile_migrations:
+                    if column_name not in profile_columns:
+                        self.conn.execute(sql)
+
+                state_columns = {
+                    row["name"]
+                    for row in self.conn.execute(
+                        """
+                        PRAGMA table_info(
+                            configuration_state
+                        )
+                        """
+                    ).fetchall()
+                }
+
+                if "applied_actuator_voltage" not in state_columns:
+                    self.conn.execute(
+                        """
+                        ALTER TABLE configuration_state
+                        ADD COLUMN applied_actuator_voltage REAL
+                        """
+                    )
+
+                self.conn.commit()
+
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def delete_blade_type(
         self,
