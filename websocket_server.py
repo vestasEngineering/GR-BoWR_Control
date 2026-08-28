@@ -58,6 +58,23 @@ class WebsocketServer():
         self.feedforward_acks = queues.feedforward_acks
         self.mcu_ready = queues.mcu_ready
         self.job_manager = job_manager
+        self.job_manager = job_manager
+
+        self.drive_direction_acks = (
+            queues.drive_direction_acks
+        )
+
+        self.drive_direction_test_acks = (
+            queues.drive_direction_test_acks
+        )
+
+        self.drive_direction_test_results = (
+            queues.drive_direction_test_results
+        )
+
+        self._drive_direction_test_lock = (
+            asyncio.Lock()
+        )
 
         if job_manager is None:
             raise ValueError("job_manager is required")
@@ -106,7 +123,7 @@ class WebsocketServer():
                 db=job_manager.db,
                 mcu_writes=self.mcu_writes,
                 ack_queue=(
-                    self.motor_direction_acks
+                    self.drive_direction_acks
                 ),
                 process_active=(
                     self
@@ -1748,6 +1765,369 @@ class WebsocketServer():
 
         return True
 
+    async def _wait_for_correlated_queue_message(
+        self,
+        queue: asyncio.Queue,
+        *,
+        transaction_id: str,
+        expected_type: str,
+        timeout_s: float,
+    ) -> Dict[str, Any]:
+        """
+        Wait for a queue message belonging to one transaction.
+
+        Stale messages from earlier operations are discarded. The timeout
+        applies to the complete wait, not separately to every stale message.
+
+        This helper assumes operations using the queue are serialized so only
+        one active caller owns the expected transaction.
+        """
+        deadline = (
+            asyncio.get_running_loop().time()
+            + timeout_s
+        )
+
+        while True:
+            remaining_s = (
+                deadline
+                - asyncio.get_running_loop().time()
+            )
+
+            if remaining_s <= 0:
+                raise asyncio.TimeoutError(
+                    "Timed out waiting for "
+                    f"{expected_type} for transaction "
+                    f"{transaction_id}."
+                )
+
+            message = await asyncio.wait_for(
+                queue.get(),
+                timeout=remaining_s,
+            )
+
+            if not isinstance(
+                message,
+                dict,
+            ):
+                self.logger.log.warning(
+                    "Discarding non-dictionary queue "
+                    "message while waiting for "
+                    f"{expected_type}: "
+                    f"value={message!r}"
+                )
+
+                continue
+
+            message_type = str(
+                message.get(
+                    "type",
+                    "",
+                )
+            )
+
+            received_transaction_id = str(
+                message.get(
+                    "transaction_id",
+                    "",
+                )
+            )
+
+            if (
+                message_type
+                != expected_type
+            ):
+                self.logger.log.warning(
+                    "Discarding unexpected message from "
+                    "motor-test acknowledgement queue: "
+                    f"expected_type={expected_type} "
+                    f"received_type={message_type} "
+                    f"expected_transaction_id="
+                    f"{transaction_id} "
+                    f"received_transaction_id="
+                    f"{received_transaction_id}"
+                )
+
+                continue
+
+            if (
+                received_transaction_id
+                != transaction_id
+            ):
+                self.logger.log.warning(
+                    "Discarding stale motor-test message: "
+                    f"type={message_type} "
+                    f"expected_transaction_id="
+                    f"{transaction_id} "
+                    f"received_transaction_id="
+                    f"{received_transaction_id} "
+                    f"axis={message.get('axis')}"
+                )
+
+                continue
+
+            return message
+
+    async def handle_drive_direction_request(
+        self,
+        websocket,
+        cmd,
+    ):
+        """
+        Handle motor and encoder installation-direction requests.
+
+        Reading configuration and running a bounded motor test do not require
+        actor initials.
+
+        Saving or restoring configuration requires validated actor initials
+        because those operations change persisted robot configuration.
+        """
+        request_type = cmd.get(
+            "type"
+        )
+
+        supported_types = {
+            "get_drive_direction_configuration",
+            "save_drive_direction_configuration",
+            "restore_drive_direction_defaults",
+            "run_drive_direction_test",
+        }
+
+        if request_type not in supported_types:
+            return False
+
+        request_id = cmd.get(
+            "req_id"
+        )
+
+        try:
+            # ----------------------------------------------------------
+            # Read current configuration
+            # ----------------------------------------------------------
+            if (
+                request_type
+                == "get_drive_direction_configuration"
+            ):
+                await self.send_response(
+                    websocket,
+                    {
+                        "type":
+                            "drive_direction_configuration",
+                        "ok":
+                            True,
+                        **self.motor_direction_manager.get(),
+                    },
+                    request_id=request_id,
+                )
+
+                return True
+
+            # ----------------------------------------------------------
+            # Run one bounded motor installation test
+            # ----------------------------------------------------------
+            if (
+                request_type
+                == "run_drive_direction_test"
+            ):
+                axis = int(
+                    cmd.get(
+                        "axis",
+                        -1,
+                    )
+                )
+
+                if axis not in range(4):
+                    raise ValueError(
+                        "axis must be between "
+                        "0 and 3."
+                    )
+
+                if self._process_is_confirmed_active():
+                    raise RuntimeError(
+                        "Stop the process before "
+                        "testing a motor."
+                    )
+
+                async with self._drive_direction_test_lock:
+                    transaction_id = (
+                        f"direction-test-{uuid4()}"
+                    )
+
+                    await self.mcu_writes.put({
+                        "action":
+                            "start_drive_direction_test",
+                        "transaction_id":
+                            transaction_id,
+                        "axis":
+                            axis,
+                        "lease_ms":
+                            2000,
+
+                        # This is a transient motion command.
+                        #
+                        # It must never be replayed after a
+                        # serial failure or reconnection.
+                        "_transient_motion":
+                            True,
+
+                        "_expires_monotonic": (
+                            asyncio
+                            .get_running_loop()
+                            .time()
+                            + 0.6
+                        ),
+                    })
+
+                    ack = (
+                        await self
+                        ._wait_for_correlated_queue_message(
+                            self.drive_direction_test_acks,
+                            transaction_id=transaction_id,
+                            expected_type=(
+                                "drive_direction_test_ack"
+                            ),
+                            timeout_s=2.0,
+                        )
+                    )
+
+                    if ack.get("ok") is not True:
+                        raise RuntimeError(
+                            str(
+                                ack.get("error")
+                                or (
+                                    "The motor direction "
+                                    "test was rejected."
+                                )
+                            )
+                        )
+
+                    result = (
+                        await self
+                        ._wait_for_correlated_queue_message(
+                            self.drive_direction_test_results,
+                            transaction_id=transaction_id,
+                            expected_type=(
+                                "drive_direction_test_result"
+                            ),
+                            timeout_s=5.0,
+                        )
+                    )
+
+                    if (
+                        result.get("axis")
+                        is not None
+                        and int(result["axis"])
+                        != axis
+                    ):
+                        raise RuntimeError(
+                            "The motor-test result was "
+                            "returned for the wrong axis."
+                        )
+
+                    await self.send_response(
+                        websocket,
+                        {
+                            "type":
+                                "drive_direction_test_result",
+                            **result,
+                        },
+                        request_id=request_id,
+                    )
+
+                return True
+
+            # ----------------------------------------------------------
+            # Persist combined motor and encoder direction settings
+            # ----------------------------------------------------------
+            if (
+                request_type
+                == "save_drive_direction_configuration"
+            ):
+                await self.save_drive_direction_configuration_request(
+                    websocket,
+                    cmd,
+                )
+                return True
+
+            # ----------------------------------------------------------
+            # Restore combined factory direction settings
+            # ----------------------------------------------------------
+            if (
+                request_type
+                == "restore_drive_direction_defaults"
+            ):
+                await self.restore_drive_direction_defaults_request(
+                    websocket,
+                    cmd,
+                )
+                return True
+
+            raise ValueError(
+                "Unsupported drive direction request."
+            )
+
+        except asyncio.TimeoutError as error:
+            self.logger.log.error(
+                "Drive direction request timed out: "
+                f"type={request_type} "
+                f"req_id={request_id} "
+                f"error={error}"
+            )
+
+            await self.send_error(
+                websocket,
+                error=(
+                    "drive_direction_request_timeout"
+                ),
+                message=(
+                    "The robot controller did not "
+                    "complete the motor installation "
+                    "request before the timeout."
+                ),
+                request_id=request_id,
+                details=str(error),
+            )
+
+        except (
+            TypeError,
+            ValueError,
+            RuntimeError,
+        ) as error:
+            self.logger.log.warning(
+                "Drive direction request rejected: "
+                f"type={request_type} "
+                f"req_id={request_id} "
+                f"error={error}"
+            )
+
+            await self.send_error(
+                websocket,
+                error=(
+                    "drive_direction_request_rejected"
+                ),
+                message=str(error),
+                request_id=request_id,
+            )
+
+        except Exception as error:
+            self.logger.log.exception(
+                "Drive direction request failed."
+            )
+
+            await self.send_error(
+                websocket,
+                error=(
+                    "drive_direction_request_failed"
+                ),
+                message=(
+                    "The motor installation "
+                    "configuration request could "
+                    "not be completed."
+                ),
+                request_id=request_id,
+                details=str(error),
+            )
+
+        return True
 
     async def handle_feedforward_request(
         self,
@@ -2011,6 +2391,12 @@ class WebsocketServer():
             return
 
         if await self.handle_feedforward_request(
+            websocket,
+            cmd,
+        ):
+            return
+
+        if await self.handle_drive_direction_request(
             websocket,
             cmd,
         ):
@@ -3753,6 +4139,142 @@ class WebsocketServer():
 
             return
 
+    async def _commit_drive_direction_configuration(
+        self,
+        *,
+        motor_directions,
+        encoder_directions,
+        actor,
+        restored_defaults,
+    ):
+        """Apply, persist, and reset the logical encoder origin for the new signs.
+
+        Direction application invalidates the H7 encoder session. The reset is
+        therefore performed against the new session before process readiness can
+        be restored. A failure leaves motion inhibited and startup incomplete.
+        """
+        active_job = self.job_manager.get_active_job() if self.job_manager else None
+        if active_job is not None:
+            raise RuntimeError(
+                "End or cancel the active job before changing drive directions."
+            )
+
+        if restored_defaults:
+            result = await self.motor_direction_manager.restore_defaults(actor)
+        else:
+            result = await self.motor_direction_manager.save(
+                motor_directions,
+                encoder_directions,
+                actor,
+            )
+
+        self._motor_direction_runtime_loaded = True
+        self._motor_direction_apply_error = None
+        self.encoder_startup_ready = False
+        self.startup_complete.clear()
+
+        try:
+            encoder_result = await self.encoder_persistence.operator_reset()
+        except Exception as error:
+            self.encoder_startup_ready = False
+            self.encoder_startup_error = str(error)
+            self.startup_error = (
+                "Drive directions were saved, but encoder restoration failed. "
+                "Motion remains inhibited."
+            )
+            self.logger.log.exception(
+                "Drive directions applied but encoder reset failed: "
+                "transaction_id=%s encoder_session_id=%s",
+                result.transaction_id,
+                result.encoder_session_id,
+            )
+            raise RuntimeError(self.startup_error) from error
+
+        confirmed_session = encoder_result.get("encoder_session_id")
+        if confirmed_session != result.encoder_session_id:
+            self.encoder_startup_ready = False
+            self.encoder_startup_error = "encoder_session_mismatch_after_direction_change"
+            self.startup_error = (
+                "Encoder restoration completed for an unexpected session. "
+                "Motion remains inhibited."
+            )
+            raise RuntimeError(self.startup_error)
+
+        self.encoder_startup_ready = (
+            self.encoder_persistence.state == EncoderRecoveryState.VALID
+        )
+        if not self.encoder_startup_ready:
+            self.encoder_startup_error = "encoder_not_valid_after_direction_change"
+            self.startup_error = (
+                "Encoder restoration did not reach VALID state. Motion remains inhibited."
+            )
+            raise RuntimeError(self.startup_error)
+
+        self.encoder_startup_error = None
+        self.startup_error = None
+        if (
+            self.configuration_loaded_to_mcu
+            and self._feedforward_runtime_loaded
+            and self._motor_direction_runtime_loaded
+        ):
+            self.startup_complete.set()
+
+        return result, encoder_result
+
+
+    async def save_drive_direction_configuration_request(self, websocket, cmd):
+        """Complete request branch for save_drive_direction_configuration."""
+        actor = self.validate_actor_initials(cmd)
+        result, encoder_result = await self._commit_drive_direction_configuration(
+            motor_directions=cmd.get("motor_directions"),
+            encoder_directions=cmd.get("encoder_directions"),
+            actor=actor,
+            restored_defaults=False,
+        )
+        await self.send_response(
+            websocket,
+            {
+                "type": "drive_direction_configuration_saved",
+                "ok": True,
+                "transaction_id": result.transaction_id,
+                "motor_directions": result.motor_directions,
+                "encoder_directions": result.encoder_directions,
+                "encoder_session_id": result.encoder_session_id,
+                "encoder_restore_required": False,
+                "encoder_reset": encoder_result,
+                "verification_required": True,
+                "is_factory_default": False,
+            },
+            request_id=cmd.get("req_id"),
+        )
+
+
+    async def restore_drive_direction_defaults_request(self, websocket, cmd):
+        """Complete request branch for restore_drive_direction_defaults."""
+        actor = self.validate_actor_initials(cmd)
+        result, encoder_result = await self._commit_drive_direction_configuration(
+            motor_directions=None,
+            encoder_directions=None,
+            actor=actor,
+            restored_defaults=True,
+        )
+        await self.send_response(
+            websocket,
+            {
+                "type": "drive_direction_defaults_restored",
+                "ok": True,
+                "transaction_id": result.transaction_id,
+                "motor_directions": result.motor_directions,
+                "encoder_directions": result.encoder_directions,
+                "encoder_session_id": result.encoder_session_id,
+                "encoder_restore_required": False,
+                "encoder_reset": encoder_result,
+                "verification_required": True,
+                "is_factory_default": True,
+            },
+            request_id=cmd.get("req_id"),
+        )
+
 
         # ==========================================================
         # Actuator status
@@ -4557,17 +5079,43 @@ class WebsocketServer():
     async def apply_persisted_motor_directions(
         self,
     ) -> bool:
+        """
+        Apply the persisted motor-output and encoder-normalization
+        installation directions to the current H7 runtime.
+
+        Both direction domains are treated as one atomic installation
+        configuration. Startup readiness is not confirmed unless the H7
+        acknowledges the matching transaction and exact values.
+
+        This method does not start or resume motion.
+        """
+        if self._motor_direction_runtime_loaded:
+            return True
+
         try:
             persisted = (
-                self.motor_direction_manager
-                .get()
+                self.motor_direction_manager.get()
+            )
+
+            motor_directions = (
+                persisted[
+                    "motor_directions"
+                ]
+            )
+
+            encoder_directions = (
+                persisted[
+                    "encoder_directions"
+                ]
             )
 
             self.logger.log.info(
-                "Applying persisted motor "
-                "directions to H7: "
-                f"directions="
-                f"{persisted['directions']}"
+                "Applying persisted drive direction "
+                "configuration to H7: "
+                f"motor_directions="
+                f"{motor_directions} "
+                f"encoder_directions="
+                f"{encoder_directions}"
             )
 
             result = (
@@ -4585,18 +5133,118 @@ class WebsocketServer():
             )
 
             self.logger.log.info(
-                "Persisted motor directions "
-                "confirmed by H7: "
+                "Persisted drive direction "
+                "configuration confirmed by H7: "
                 f"transaction_id="
                 f"{result.transaction_id} "
-                f"directions="
-                f"{result.directions}"
+                f"motor_directions="
+                f"{result.motor_directions} "
+                f"encoder_directions="
+                f"{result.encoder_directions} "
+                f"encoder_restore_required="
+                f"{result.encoder_restore_required}"
             )
+
+            await self.responses.put({
+                "type":
+                    "motor_direction_runtime_status",
+
+                "loaded":
+                    True,
+
+                "transaction_id":
+                    result.transaction_id,
+
+                "motor_directions":
+                    result.motor_directions,
+
+                "encoder_directions":
+                    result.encoder_directions,
+
+                "encoder_restore_required":
+                    result.encoder_restore_required,
+            })
 
             return True
 
         except asyncio.CancelledError:
             raise
+
+        except asyncio.TimeoutError as error:
+            self._motor_direction_runtime_loaded = (
+                False
+            )
+
+            self._motor_direction_apply_error = (
+                "The H7 did not confirm the "
+                "persisted motor and encoder "
+                "direction configuration before "
+                "the timeout."
+            )
+
+            self.startup_complete.clear()
+
+            self.logger.log.exception(
+                "Timed out while applying persisted "
+                "motor and encoder directions to H7."
+            )
+
+            await self.responses.put({
+                "type":
+                    "motor_direction_runtime_status",
+
+                "loaded":
+                    False,
+
+                "error":
+                    "drive_direction_acknowledgement_timeout",
+
+                "message":
+                    self._motor_direction_apply_error,
+
+                "details":
+                    str(error),
+            })
+
+            return False
+
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            RuntimeError,
+        ) as error:
+            self._motor_direction_runtime_loaded = (
+                False
+            )
+
+            self._motor_direction_apply_error = (
+                str(error)
+            )
+
+            self.startup_complete.clear()
+
+            self.logger.log.exception(
+                "Persisted motor and encoder direction "
+                "configuration is invalid or was "
+                "rejected by H7."
+            )
+
+            await self.responses.put({
+                "type":
+                    "motor_direction_runtime_status",
+
+                "loaded":
+                    False,
+
+                "error":
+                    "drive_direction_configuration_rejected",
+
+                "message":
+                    str(error),
+            })
+
+            return False
 
         except Exception as error:
             self._motor_direction_runtime_loaded = (
@@ -4607,9 +5255,32 @@ class WebsocketServer():
                 str(error)
             )
 
+            self.startup_complete.clear()
+
             self.logger.log.exception(
-                "Failed to apply persisted "
-                "motor directions."
+                "Failed to apply persisted motor "
+                "and encoder directions."
             )
+
+            await self.responses.put({
+                "type":
+                    "motor_direction_runtime_status",
+
+                "loaded":
+                    False,
+
+                "error":
+                    "drive_direction_configuration_failed",
+
+                "message":
+                    (
+                        "The persisted motor and encoder "
+                        "directions could not be applied "
+                        "to the robot controller."
+                    ),
+
+                "details":
+                    str(error),
+            })
 
             return False

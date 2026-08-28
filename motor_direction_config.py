@@ -1,437 +1,240 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping
+from typing import Any, Callable, Optional, Sequence
+from uuid import uuid4
+
+FACTORY_MOTOR_DIRECTIONS = [1, -1, -1, 1]
+FACTORY_ENCODER_DIRECTIONS = [1, -1, 1, -1]
 
 
-FACTORY_MOTOR_DIRECTIONS: Dict[str, int] = {
-    "motor_1": 1,
-    "motor_2": -1,
-    "motor_3": -1,
-    "motor_4": 1,
-}
-
-MOTOR_DIRECTION_KEYS = (
-    "motor_1",
-    "motor_2",
-    "motor_3",
-    "motor_4",
-)
-
-
-def validate_motor_directions(
-    directions: Mapping[str, Any],
-) -> Dict[str, int]:
-    if not isinstance(
-        directions,
-        Mapping,
-    ):
-        raise ValueError(
-            "Motor directions must be "
-            "a JSON object."
-        )
-
-    missing = [
-        key
-        for key in MOTOR_DIRECTION_KEYS
-        if key not in directions
-    ]
-
-    extra = [
-        key
-        for key in directions
-        if key not in MOTOR_DIRECTION_KEYS
-    ]
-
-    if missing:
-        raise ValueError(
-            "Missing motor directions: "
-            + ", ".join(missing)
-        )
-
-    if extra:
-        raise ValueError(
-            "Unsupported motor directions: "
-            + ", ".join(extra)
-        )
-
-    clean: Dict[str, int] = {}
-
-    for key in MOTOR_DIRECTION_KEYS:
-        raw_value = directions[key]
-
-        if (
-            isinstance(raw_value, bool)
-            or not isinstance(
-                raw_value,
-                (int, float),
-            )
-        ):
-            raise ValueError(
-                f"{key} must be 1 or -1."
-            )
-
-        value = int(
-            raw_value
-        )
-
-        if value not in {
-            -1,
-            1,
-        }:
-            raise ValueError(
-                f"{key} must be 1 or -1."
-            )
-
-        clean[key] = value
-
-    return clean
+def validate_directions(values: Sequence[int], field: str) -> list[int]:
+    if not isinstance(values, (list, tuple)) or len(values) != 4:
+        raise ValueError(f"{field} must contain exactly four values.")
+    normalized: list[int] = []
+    for index, raw in enumerate(values):
+        if isinstance(raw, bool):
+            raise ValueError(f"{field}[{index}] must be -1 or 1.")
+        try:
+            value = int(raw)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{field}[{index}] must be -1 or 1.") from error
+        if value not in (-1, 1):
+            raise ValueError(f"{field}[{index}] must be -1 or 1.")
+        normalized.append(value)
+    return normalized
 
 
-def motor_directions_to_wire(
-    directions: Mapping[str, Any],
-) -> list:
-    clean = validate_motor_directions(
-        directions
-    ) 
+def calculate_axis_directions(
+    *,
+    tested_motor_direction: int,
+    raw_encoder_delta: int,
+    operator_observed_forward: bool,
+) -> tuple[int, int]:
+    """Return motor-output and encoder-normalization polarity for one axis.
 
-    return [
-        clean[key]
-        for key in MOTOR_DIRECTION_KEYS
-    ]
+    The test is a positive robot-frame command made with
+    tested_motor_direction. If the observed physical movement was backward,
+    the output polarity must be inverted. The encoder polarity is then chosen
+    so the raw delta for physical forward becomes positive.
+    """
+    if tested_motor_direction not in (-1, 1):
+        raise ValueError("tested_motor_direction must be -1 or 1.")
+    if isinstance(raw_encoder_delta, bool) or int(raw_encoder_delta) == 0:
+        raise ValueError("raw_encoder_delta must be non-zero.")
 
-
-def motor_directions_from_wire(
-    raw_directions: Any,
-) -> Dict[str, int]:
-    if not isinstance(
-        raw_directions,
-        list,
-    ):
-        raise ValueError(
-            "H7 motor direction "
-            "acknowledgement must contain "
-            "a directions array."
-        )
-
-    if (
-        len(raw_directions)
-        != len(MOTOR_DIRECTION_KEYS)
-    ):
-        raise ValueError(
-            "H7 motor direction "
-            "acknowledgement contains an "
-            "invalid direction count."
-        )
-
-    directions = {
-        key: raw_directions[index]
-        for index, key in enumerate(
-            MOTOR_DIRECTION_KEYS
-        )
-    }
-
-    return validate_motor_directions(
-        directions
+    raw_delta = int(raw_encoder_delta)
+    motor_direction = (
+        tested_motor_direction
+        if operator_observed_forward
+        else -tested_motor_direction
     )
+    forward_raw_delta = raw_delta if operator_observed_forward else -raw_delta
+    encoder_direction = 1 if forward_raw_delta > 0 else -1
+    return motor_direction, encoder_direction
 
 
-@dataclass(
-    frozen=True,
-)
-class MotorDirectionApplyResult:
-    directions: Dict[str, int]
+@dataclass(frozen=True)
+class DriveDirectionResult:
     transaction_id: str
-    restored_defaults: bool
+    motor_directions: list[int]
+    encoder_directions: list[int]
+    encoder_session_id: int
+    encoder_restore_required: bool
+    restored_defaults: bool = False
 
 
 class MotorDirectionManager:
+    """Serialize and correlate combined drive-direction transactions."""
+
     def __init__(
         self,
-        *,
         db: Any,
         mcu_writes: asyncio.Queue,
         ack_queue: asyncio.Queue,
-        process_active,
+        process_active: Callable[[], bool],
         logger: Any,
         timeout_s: float = 8.0,
-    ):
+    ) -> None:
         self.db = db
         self.mcu_writes = mcu_writes
         self.ack_queue = ack_queue
         self.process_active = process_active
         self.logger = logger
         self.timeout_s = timeout_s
-
         self._lock = asyncio.Lock()
 
-    def get(self) -> Dict[str, Any]:
-        directions = (
-            self._read_persisted_directions()
-        )
-
+    def get(self) -> dict[str, Any]:
+        stored = self.db.get_drive_direction_configuration()
+        if stored is None:
+            motor = list(FACTORY_MOTOR_DIRECTIONS)
+            encoder = list(FACTORY_ENCODER_DIRECTIONS)
+        else:
+            motor = validate_directions(
+                stored.get("motor_directions"), "motor_directions"
+            )
+            encoder = validate_directions(
+                stored.get("encoder_directions"), "encoder_directions"
+            )
         return {
-            "directions":
-                directions,
-            "factory_defaults":
-                dict(
-                    FACTORY_MOTOR_DIRECTIONS
-                ),
+            "motor_directions": motor,
+            "encoder_directions": encoder,
             "is_factory_default": (
-                directions
-                == FACTORY_MOTOR_DIRECTIONS
+                motor == FACTORY_MOTOR_DIRECTIONS
+                and encoder == FACTORY_ENCODER_DIRECTIONS
             ),
         }
 
-    async def apply_persisted(
-        self,
-    ) -> MotorDirectionApplyResult:
-        directions = (
-            self._read_persisted_directions()
-        )
-
+    async def apply_persisted(self) -> DriveDirectionResult:
+        current = self.get()
         return await self._apply(
-            directions,
-            actor="system",
-            restored_defaults=False,
+            current["motor_directions"],
+            current["encoder_directions"],
+            actor=None,
             persist=False,
-            event_type=None,
+            restored_defaults=current["is_factory_default"],
         )
 
     async def save(
         self,
-        directions: Mapping[str, Any],
-        *,
+        motor_directions: Sequence[int],
+        encoder_directions: Sequence[int],
         actor: str,
-    ) -> MotorDirectionApplyResult:
-        clean = validate_motor_directions(
-            directions
-        )
-
+    ) -> DriveDirectionResult:
         return await self._apply(
-            clean,
+            validate_directions(motor_directions, "motor_directions"),
+            validate_directions(encoder_directions, "encoder_directions"),
             actor=actor,
+            persist=True,
             restored_defaults=False,
-            persist=True,
-            event_type=(
-                "motor_direction_saved"
-            ),
         )
 
-    async def restore_defaults(
-        self,
-        *,
-        actor: str,
-    ) -> MotorDirectionApplyResult:
+    async def restore_defaults(self, actor: str) -> DriveDirectionResult:
         return await self._apply(
-            dict(
-                FACTORY_MOTOR_DIRECTIONS
-            ),
+            list(FACTORY_MOTOR_DIRECTIONS),
+            list(FACTORY_ENCODER_DIRECTIONS),
             actor=actor,
-            restored_defaults=True,
             persist=True,
-            event_type=(
-                "motor_direction_"
-                "factory_defaults_restored"
-            ),
-        )
-
-    def _read_persisted_directions(
-        self,
-    ) -> Dict[str, int]:
-        catalog = (
-            self.db
-            .get_configuration_catalog()
-        )
-
-        raw_directions = catalog.get(
-            "motor_direction"
-        )
-
-        if not raw_directions:
-            return dict(
-                FACTORY_MOTOR_DIRECTIONS
-            )
-
-        return validate_motor_directions(
-            raw_directions
+            restored_defaults=True,
         )
 
     async def _apply(
         self,
-        directions: Dict[str, int],
+        motor: Sequence[int],
+        encoder: Sequence[int],
         *,
-        actor: str,
-        restored_defaults: bool,
+        actor: Optional[str],
         persist: bool,
-        event_type: str | None,
-    ) -> MotorDirectionApplyResult:
+        restored_defaults: bool,
+    ) -> DriveDirectionResult:
         async with self._lock:
             if self.process_active():
                 raise RuntimeError(
-                    "Motor directions cannot "
-                    "change while the process "
-                    "is active."
+                    "The process must be confirmed stopped before changing "
+                    "drive directions."
                 )
 
-            transaction_id = (
-                uuid.uuid4().hex
+            requested_motor = validate_directions(motor, "motor_directions")
+            requested_encoder = validate_directions(
+                encoder, "encoder_directions"
             )
-
-            self._drain_acks()
+            transaction_id = f"drive-direction-{uuid4()}"
 
             await self.mcu_writes.put({
-                "action":
-                    "set_motor_direction",
-                "transaction_id":
-                    transaction_id,
-                "directions":
-                    motor_directions_to_wire(
-                        directions
-                    ),
+                "action": "set_drive_direction_configuration",
+                "transaction_id": transaction_id,
+                "motor_directions": requested_motor,
+                "encoder_directions": requested_encoder,
             })
 
-            acknowledgement = (
-                await self._wait_for_ack(
-                    transaction_id
-                )
+            acknowledgement = await self._wait_for_ack(transaction_id)
+            applied_motor = validate_directions(
+                acknowledgement.get("motor_directions"), "motor_directions"
             )
-
-            applied_directions = (
-                motor_directions_from_wire(
-                    acknowledgement.get(
-                        "directions"
-                    )
-                )
+            applied_encoder = validate_directions(
+                acknowledgement.get("encoder_directions"), "encoder_directions"
             )
-
-            if (
-                applied_directions
-                != directions
-            ):
+            if applied_motor != requested_motor or applied_encoder != requested_encoder:
                 raise RuntimeError(
-                    "The H7 acknowledged "
-                    "different motor directions "
-                    "than were requested."
+                    "The H7 acknowledged different drive direction values."
+                )
+
+            session_id = acknowledgement.get("encoder_session_id")
+            if isinstance(session_id, bool) or not isinstance(session_id, int):
+                raise RuntimeError(
+                    "The H7 acknowledgement did not include a valid new "
+                    "encoder_session_id."
+                )
+            if acknowledgement.get("encoder_restore_required") is not True:
+                raise RuntimeError(
+                    "The H7 did not keep motion inhibited for encoder restoration."
                 )
 
             if persist:
-                self.db.save_motor_directions(
-                    directions=directions,
-                    actor=actor,
-                    event_type=event_type,
-                    restored_defaults=(
-                        restored_defaults
-                    ),
-                    transaction_id=(
-                        transaction_id
-                    ),
+                self.db.save_drive_direction_configuration(
+                    requested_motor,
+                    requested_encoder,
+                    actor,
+                    transaction_id,
                 )
 
-                self.logger.log.info(
-                    "Motor directions committed "
-                    "to SQLite: "
-                    f"transaction_id="
-                    f"{transaction_id} "
-                    f"directions={directions}"
-                )
-            return MotorDirectionApplyResult(
-                directions=dict(
-                    directions
-                ),
-                transaction_id=(
-                    transaction_id
-                ),
-                restored_defaults=(
-                    restored_defaults
-                ),
+            return DriveDirectionResult(
+                transaction_id=transaction_id,
+                motor_directions=applied_motor,
+                encoder_directions=applied_encoder,
+                encoder_session_id=session_id,
+                encoder_restore_required=True,
+                restored_defaults=restored_defaults,
             )
 
-    def _drain_acks(
-        self,
-    ) -> None:
+    async def _wait_for_ack(self, transaction_id: str) -> dict[str, Any]:
+        deadline = asyncio.get_running_loop().time() + self.timeout_s
         while True:
-            try:
-                self.ack_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                return
-
-    async def _wait_for_ack(
-        self,
-        transaction_id: str,
-    ) -> Dict[str, Any]:
-        loop = (
-            asyncio.get_running_loop()
-        )
-
-        deadline = (
-            loop.time()
-            + self.timeout_s
-        )
-
-        while True:
-            remaining = (
-                deadline
-                - loop.time()
-            )
-
+            remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise asyncio.TimeoutError(
-                    "Timed out waiting for "
-                    "the H7 motor direction "
-                    "acknowledgement."
+                    "H7 drive-direction acknowledgement timed out."
                 )
-
-            message = (
-                await asyncio.wait_for(
-                    self.ack_queue.get(),
-                    timeout=remaining,
-                )
+            message = await asyncio.wait_for(
+                self.ack_queue.get(), timeout=remaining
             )
-
-            if not isinstance(
-                message,
-                dict,
-            ):
+            if not isinstance(message, dict):
                 continue
-
-            if (
-                message.get(
-                    "transaction_id"
-                )
-                != transaction_id
-            ):
+            if message.get("type") != "drive_direction_configuration_ack":
                 self.logger.log.warning(
-                    "Ignoring stale or unrelated "
-                    "motor direction "
-                    "acknowledgement: "
-                    f"expected="
-                    f"{transaction_id} "
-                    f"received="
-                    f"{message.get('transaction_id')}"
+                    "Discarding unexpected drive direction acknowledgement: %r",
+                    message,
                 )
-
                 continue
-
-            if (
-                message.get("type")
-                != "motor_direction_ack"
-            ):
+            if message.get("transaction_id") != transaction_id:
+                self.logger.log.warning(
+                    "Discarding stale drive direction acknowledgement: %r",
+                    message,
+                )
                 continue
-
             if message.get("ok") is not True:
                 raise RuntimeError(
-                    str(
-                        message.get(
-                            "error"
-                        )
-                        or (
-                            "The H7 rejected "
-                            "the motor directions."
-                        )
-                    )
+                    str(message.get("error") or "H7 rejected drive directions.")
                 )
-
             return message

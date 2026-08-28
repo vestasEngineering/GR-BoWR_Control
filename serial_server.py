@@ -31,6 +31,9 @@ class SerialServer:
         self.feedforward_acks = queues.feedforward_acks
         self.motor_direction_acks = queues.motor_direction_acks
         self.process_start_acks = queues.process_start_acks
+        self.drive_direction_acks = queues.drive_direction_acks
+        self.drive_direction_test_acks = queues.drive_direction_test_acks
+        self.drive_direction_test_results = queues.drive_direction_test_results
 
         # State
         self.last_andon_code: Optional[int] = None
@@ -821,6 +824,23 @@ class SerialServer:
                             f"error={msg_dict.get('error')} "
                             f"ff={msg_dict.get('ff')}"
                         )
+
+                    elif msg_dict.get("type") == "drive_direction_configuration_ack":
+                        await self.drive_direction_acks.put(msg_dict)
+                        self.logger.log.info(
+                            "Drive direction configuration acknowledgement: "
+                            f"ok={msg_dict.get('ok')} "
+                            f"transaction_id={msg_dict.get('transaction_id')} "
+                            f"error={msg_dict.get('error')} "
+                            f"motor={msg_dict.get('motor_directions')} "
+                            f"encoder={msg_dict.get('encoder_directions')}"
+                        )
+
+                    elif msg_dict.get("type") == "drive_direction_test_ack":
+                        await self.drive_direction_test_acks.put(msg_dict)
+
+                    elif msg_dict.get("type") == "drive_direction_test_result":
+                        await self.drive_direction_test_results.put(msg_dict)
 
                     elif (
                         msg_dict.get("type")

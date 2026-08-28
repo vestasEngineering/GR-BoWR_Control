@@ -4,6 +4,7 @@ from configuration_db import ConfigurationDatabaseMixin
 from encoder_checkpoint_db import EncoderCheckpointDatabaseMixin
 from actuator_calibration_db import ActuatorCalibrationDatabaseMixin
 from configuration_db_feedforward_mixin import FeedforwardConfigurationDatabaseMixin
+from drive_direction_configuration_db import DriveDirectionConfigurationDatabaseMixin
 import json
 import sqlite3
 import threading
@@ -40,6 +41,7 @@ def utc_now_iso() -> str:
 class DatabaseService(
     ConfigurationDatabaseMixin,
     FeedforwardConfigurationDatabaseMixin,
+    DriveDirectionConfigurationDatabaseMixin,
     EncoderCheckpointDatabaseMixin,
     ServiceDatabaseMixin,
     ActuatorCalibrationDatabaseMixin,
@@ -85,6 +87,8 @@ class DatabaseService(
         self.create_configuration_tables()
         self.create_service_tables()
         self.create_actuator_calibration_tables()
+        self.create_drive_direction_configuration_tables()
+        self.migrate_drive_direction_configuration()
         self.migrate_configuration_tables()
         self.migrate_feedforward_configuration()
         self._migrate_existing_database()
@@ -1589,6 +1593,8 @@ class DatabaseService(
             "transition_profiles",
             "configuration_state",
             "configuration_events",
+            "drive_direction_configuration",
+            "drive_direction_configuration_events",
         ]
 
         with self._lock:

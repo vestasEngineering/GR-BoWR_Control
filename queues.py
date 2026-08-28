@@ -19,6 +19,9 @@ class Queues():
         self.feedforward_acks = asyncio.Queue()
         self.motor_direction_acks = asyncio.Queue()
         self.process_start_acks = asyncio.Queue()
+        self.drive_direction_acks = asyncio.Queue()
+        self.drive_direction_test_acks = asyncio.Queue()
+        self.drive_direction_test_results = asyncio.Queue()
 
     def show_queue_size(self):
         for q in self.queues:
