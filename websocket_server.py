@@ -33,6 +33,7 @@ MODULES = [
 
     {"id": "ultrasonic", "name": "Ultrasonic Sensor", "category": "sensor", "sensor": "ultrasonic"},
     {"id": "battery", "name": "Battery", "category": "sensor", "sensor": "battery"},
+    {"id": "estop", "name": "EStop", "category": "sensor", "sensor": "estop"},
 
     {"id": "andon_ring", "name": "Andon Ring", "category": "andon"},
     {"id": "clamp_sensor", "name": "Clamp Sensor", "category": "sensor", "sensor": "clamp"},

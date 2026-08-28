@@ -72,19 +72,19 @@ class HealthModel:
         }
 
     def _snapshot_from_andon(self, andon: Dict[str, Any], ts: float) -> Dict[str, Any]:
-        """
-        'andon' is like: {'type':'andon_diag', 'code': int, 'state': str, 'ms':..., 'override': bool, 'reasons': {...}}
-        It may also include 'faults': [str], 'fault_modules': [str] in v2 schema.
-        """
         reasons = andon.get("reasons", {}) or {}
-        code    = andon.get("code")
+        code = andon.get("code")
         state_s = andon.get("state")
 
-        faults        = (andon.get("faults") or [])
-        fault_modules = (andon.get("fault_modules") or [])
+        faults = list(andon.get("faults") or [])
 
-        # Precedence (mirror MCU resolver):
-        # E-Stop/Fault > CommsLost > BatteryLow/Blocked > PausedOrJog > Running/Green > default Warning
+        raw_fault_modules = andon.get("fault_modules") or []
+        fault_modules = list(dict.fromkeys(
+            str(module).strip()
+            for module in raw_fault_modules
+            if module is not None and str(module).strip()
+        ))
+
         if reasons.get("isEStop", False) or reasons.get("hasFault", False):
             hs: HealthStr = "Faulted"
         elif reasons.get("isCommsLost", False):
@@ -105,26 +105,32 @@ class HealthModel:
             else:
                 hs = "Warning"
 
-        # Sources: prefer module-specific list; fall back to booleans if absent
         if fault_modules:
-            src: List[str] = list(fault_modules)  # e.g., ["battery","ultrasonic","motor_1"]
+            src: List[str] = list(fault_modules)
         else:
             src = []
-            if reasons.get("isEStop"):              src.append("EStop")
-            if reasons.get("hasFault"):             src.append("ModuleFault")
-            if reasons.get("isCommsLost"):          src.append("CommsLost")
-            if reasons.get("isBatteryLow"):         src.append("BatteryLow")
-            if reasons.get("isBlockedOrStarved"):   src.append("BlockedOrStarved")
-            if reasons.get("isPausedOrJog"):        src.append("PausedOrJog")
-            if reasons.get("isRunning"):            src.append("Running")
+            if reasons.get("isEStop"):
+                src.append("EStop")
+            if reasons.get("hasFault"):
+                src.append("ModuleFault")
+            if reasons.get("isCommsLost"):
+                src.append("CommsLost")
+            if reasons.get("isBatteryLow"):
+                src.append("BatteryLow")
+            if reasons.get("isBlockedOrStarved"):
+                src.append("BlockedOrStarved")
+            if reasons.get("isPausedOrJog"):
+                src.append("PausedOrJog")
+            if reasons.get("isRunning"):
+                src.append("Running")
 
         return {
             "type": "health",
             "ts": ts,
             "state": hs,
             "sources": src,
-            "faults": faults,                   # raw fault keys for logs/QA
-            "fault_modules": fault_modules,     # module ids for HMI
+            "faults": faults,
+            "fault_modules": fault_modules,
             "andon": {
                 "code": code,
                 "state": state_s,
@@ -134,6 +140,7 @@ class HealthModel:
             "boot": self._boot_summary(self._last_boot) if self._last_boot else None,
             "firmware": self._firmware_summary(self._last_fw),
         }
+
 
     def _snapshot_from_boot(self, boot: Dict[str, Any], ts: float) -> Dict[str, Any]:
         """
