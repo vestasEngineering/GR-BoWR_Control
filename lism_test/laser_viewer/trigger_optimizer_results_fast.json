@@ -1,0 +1,3404 @@
+[
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "91faaceb9b85",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "91faaceb9b85",
+      "total_frames": 34929,
+      "basic_trigger_frames": 275,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.00787311403132068,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.05090909090909091,
+      "median_shape_score": 0.9003665154447801,
+      "centroid_std": 7.532062702459803,
+      "boundary_center_std": 7.6781561349488765
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "fb10f7331904",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "fb10f7331904",
+      "total_frames": 34929,
+      "basic_trigger_frames": 275,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.00787311403132068,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.05090909090909091,
+      "median_shape_score": 0.9003665154447801,
+      "centroid_std": 7.532062702459803,
+      "boundary_center_std": 7.6781561349488765
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "cbb86503ec67",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "cbb86503ec67",
+      "total_frames": 34929,
+      "basic_trigger_frames": 275,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.00787311403132068,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.05090909090909091,
+      "median_shape_score": 0.9003665154447801,
+      "centroid_std": 7.532062702459803,
+      "boundary_center_std": 7.6781561349488765
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "391f68570505",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "391f68570505",
+      "total_frames": 34929,
+      "basic_trigger_frames": 291,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.0083311861204157,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.048109965635738834,
+      "median_shape_score": 0.8833653170380046,
+      "centroid_std": 7.5524245793715306,
+      "boundary_center_std": 7.754277950306672
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "eae9c7530af7",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "eae9c7530af7",
+      "total_frames": 34929,
+      "basic_trigger_frames": 291,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.0083311861204157,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.048109965635738834,
+      "median_shape_score": 0.8833653170380046,
+      "centroid_std": 7.5524245793715306,
+      "boundary_center_std": 7.754277950306672
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "7bf7c2a0a357",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "7bf7c2a0a357",
+      "total_frames": 34929,
+      "basic_trigger_frames": 291,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.0083311861204157,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.048109965635738834,
+      "median_shape_score": 0.8833653170380046,
+      "centroid_std": 7.5524245793715306,
+      "boundary_center_std": 7.754277950306672
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "71106b4bc4ae",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "71106b4bc4ae",
+      "total_frames": 34929,
+      "basic_trigger_frames": 344,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.009848549915542959,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.040697674418604654,
+      "median_shape_score": 0.9003665154447801,
+      "centroid_std": 7.532062702459803,
+      "boundary_center_std": 7.6781561349488765
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "864a315ad39d",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "864a315ad39d",
+      "total_frames": 34929,
+      "basic_trigger_frames": 344,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.009848549915542959,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.040697674418604654,
+      "median_shape_score": 0.9003665154447801,
+      "centroid_std": 7.532062702459803,
+      "boundary_center_std": 7.6781561349488765
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "72161f91f065",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "72161f91f065",
+      "total_frames": 34929,
+      "basic_trigger_frames": 368,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.01053565804918549,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.03804347826086957,
+      "median_shape_score": 0.8833653170380046,
+      "centroid_std": 7.5524245793715306,
+      "boundary_center_std": 7.754277950306672
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "0ecceca0ac26",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "0ecceca0ac26",
+      "total_frames": 34929,
+      "basic_trigger_frames": 373,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.010678805577027686,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.03753351206434316,
+      "median_shape_score": 0.8833653170380046,
+      "centroid_std": 7.5524245793715306,
+      "boundary_center_std": 7.754277950306672
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "44022d879a3f",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "44022d879a3f",
+      "total_frames": 34929,
+      "basic_trigger_frames": 411,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.01176672678862836,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.0340632603406326,
+      "median_shape_score": 0.9003665154447801,
+      "centroid_std": 7.532062702459803,
+      "boundary_center_std": 7.6781561349488765
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "08aad2174ac6",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "08aad2174ac6",
+      "total_frames": 34929,
+      "basic_trigger_frames": 418,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.011967133327607432,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.03349282296650718,
+      "median_shape_score": 0.9003665154447801,
+      "centroid_std": 7.532062702459803,
+      "boundary_center_std": 7.6781561349488765
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "75ac7c09dcb7",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "75ac7c09dcb7",
+      "total_frames": 34929,
+      "basic_trigger_frames": 448,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.012826018494660597,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.03125,
+      "median_shape_score": 0.9003665154447801,
+      "centroid_std": 7.532062702459803,
+      "boundary_center_std": 7.6781561349488765
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "4b03f8ca3df7",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "4b03f8ca3df7",
+      "total_frames": 34929,
+      "basic_trigger_frames": 509,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.014572418334335367,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.0275049115913556,
+      "median_shape_score": 0.8833653170380046,
+      "centroid_std": 7.5524245793715306,
+      "boundary_center_std": 7.754277950306672
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "02eefd878edd",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "02eefd878edd",
+      "total_frames": 34929,
+      "basic_trigger_frames": 512,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.014658306851040682,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.02734375,
+      "median_shape_score": 0.8833653170380046,
+      "centroid_std": 7.5524245793715306,
+      "boundary_center_std": 7.754277950306672
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "2489f09ac50d",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "2489f09ac50d",
+      "total_frames": 34929,
+      "basic_trigger_frames": 520,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.014887342895588193,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.026923076923076925,
+      "median_shape_score": 0.9003665154447801,
+      "centroid_std": 7.532062702459803,
+      "boundary_center_std": 7.6781561349488765
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "757ebb153835",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "757ebb153835",
+      "total_frames": 34929,
+      "basic_trigger_frames": 1247,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.035700993443843226,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.011226944667201283,
+      "median_shape_score": 0.8833653170380046,
+      "centroid_std": 7.5524245793715306,
+      "boundary_center_std": 7.754277950306672
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "158f7a38b567",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "158f7a38b567",
+      "total_frames": 34929,
+      "basic_trigger_frames": 1266,
+      "good_frames": 14,
+      "basic_trigger_fraction": 0.03624495404964356,
+      "good_frame_yield": 0.00040081307795814366,
+      "good_trigger_precision": 0.011058451816745656,
+      "median_shape_score": 0.8833653170380046,
+      "centroid_std": 7.5524245793715306,
+      "boundary_center_std": 7.754277950306672
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "b7ca453e51f8",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "b7ca453e51f8",
+      "total_frames": 34929,
+      "basic_trigger_frames": 272,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.0077872255146153625,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.04779411764705882,
+      "median_shape_score": 0.9011500370233247,
+      "centroid_std": 7.592100507269339,
+      "boundary_center_std": 6.909816360090731
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "034632872413",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "034632872413",
+      "total_frames": 34929,
+      "basic_trigger_frames": 272,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.0077872255146153625,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.04779411764705882,
+      "median_shape_score": 0.9011500370233247,
+      "centroid_std": 7.592100507269339,
+      "boundary_center_std": 6.909816360090731
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "66375c546079",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "66375c546079",
+      "total_frames": 34929,
+      "basic_trigger_frames": 272,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.0077872255146153625,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.04779411764705882,
+      "median_shape_score": 0.9011500370233247,
+      "centroid_std": 7.592100507269339,
+      "boundary_center_std": 6.909816360090731
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "52f2aedf7850",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "52f2aedf7850",
+      "total_frames": 34929,
+      "basic_trigger_frames": 288,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.008245297603710384,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.04513888888888889,
+      "median_shape_score": 0.8342730530913346,
+      "centroid_std": 7.697995505477197,
+      "boundary_center_std": 7.921209638065231
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "82ec8b21d3c1",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "82ec8b21d3c1",
+      "total_frames": 34929,
+      "basic_trigger_frames": 288,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.008245297603710384,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.04513888888888889,
+      "median_shape_score": 0.8342730530913346,
+      "centroid_std": 7.697995505477197,
+      "boundary_center_std": 7.921209638065231
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "7ad100562c2b",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "7ad100562c2b",
+      "total_frames": 34929,
+      "basic_trigger_frames": 288,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.008245297603710384,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.04513888888888889,
+      "median_shape_score": 0.8342730530913346,
+      "centroid_std": 7.697995505477197,
+      "boundary_center_std": 7.921209638065231
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "f5dc57c654e4",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "f5dc57c654e4",
+      "total_frames": 34929,
+      "basic_trigger_frames": 299,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.00856022216496321,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.043478260869565216,
+      "median_shape_score": 0.8997646395339436,
+      "centroid_std": 7.784467607385034,
+      "boundary_center_std": 8.001109390533912
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "e07442b610a0",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "e07442b610a0",
+      "total_frames": 34929,
+      "basic_trigger_frames": 299,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.00856022216496321,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.043478260869565216,
+      "median_shape_score": 0.8997646395339436,
+      "centroid_std": 7.784467607385034,
+      "boundary_center_std": 8.001109390533912
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "6dce8b235651",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "6dce8b235651",
+      "total_frames": 34929,
+      "basic_trigger_frames": 299,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.00856022216496321,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.043478260869565216,
+      "median_shape_score": 0.8997646395339436,
+      "centroid_std": 7.784467607385034,
+      "boundary_center_std": 8.001109390533912
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "f5d9af99cd3e",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "f5d9af99cd3e",
+      "total_frames": 34929,
+      "basic_trigger_frames": 335,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.009590884365427009,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.03880597014925373,
+      "median_shape_score": 0.9011500370233247,
+      "centroid_std": 7.592100507269339,
+      "boundary_center_std": 6.909816360090731
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "9895e4d8bff4",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "9895e4d8bff4",
+      "total_frames": 34929,
+      "basic_trigger_frames": 335,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.009590884365427009,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.03880597014925373,
+      "median_shape_score": 0.9011500370233247,
+      "centroid_std": 7.592100507269339,
+      "boundary_center_std": 6.909816360090731
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "1441a4c30828",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "1441a4c30828",
+      "total_frames": 34929,
+      "basic_trigger_frames": 358,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.010249362993501102,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.036312849162011177,
+      "median_shape_score": 0.8342730530913346,
+      "centroid_std": 7.697995505477197,
+      "boundary_center_std": 7.921209638065231
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "00048e7481e4",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "00048e7481e4",
+      "total_frames": 34929,
+      "basic_trigger_frames": 359,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.01027799249906954,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.036211699164345405,
+      "median_shape_score": 0.8342730530913346,
+      "centroid_std": 7.697995505477197,
+      "boundary_center_std": 7.921209638065231
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "7d35f7cb6e13",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "7d35f7cb6e13",
+      "total_frames": 34929,
+      "basic_trigger_frames": 382,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.010936471127143634,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.034031413612565446,
+      "median_shape_score": 0.8997646395339436,
+      "centroid_std": 7.784467607385034,
+      "boundary_center_std": 8.001109390533912
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "93ee40e8653b",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "93ee40e8653b",
+      "total_frames": 34929,
+      "basic_trigger_frames": 390,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.011165507171691146,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.03333333333333333,
+      "median_shape_score": 0.8997646395339436,
+      "centroid_std": 7.784467607385034,
+      "boundary_center_std": 8.001109390533912
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "8c5b81f8fe4f",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "8c5b81f8fe4f",
+      "total_frames": 34929,
+      "basic_trigger_frames": 409,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.011709467777491482,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.03178484107579462,
+      "median_shape_score": 0.9011500370233247,
+      "centroid_std": 7.592100507269339,
+      "boundary_center_std": 6.909816360090731
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "78a8544e0dcb",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "78a8544e0dcb",
+      "total_frames": 34929,
+      "basic_trigger_frames": 416,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.011909874316470554,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.03125,
+      "median_shape_score": 0.9011500370233247,
+      "centroid_std": 7.592100507269339,
+      "boundary_center_std": 6.909816360090731
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "8f2be4565749",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "8f2be4565749",
+      "total_frames": 34929,
+      "basic_trigger_frames": 433,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.012396575911134015,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.03002309468822171,
+      "median_shape_score": 0.9011500370233247,
+      "centroid_std": 7.592100507269339,
+      "boundary_center_std": 6.909816360090731
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "13edc28b3a64",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "13edc28b3a64",
+      "total_frames": 34929,
+      "basic_trigger_frames": 503,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.014400641300924734,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.02584493041749503,
+      "median_shape_score": 0.9011500370233247,
+      "centroid_std": 7.592100507269339,
+      "boundary_center_std": 6.909816360090731
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "799ee8e2e224",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "799ee8e2e224",
+      "total_frames": 34929,
+      "basic_trigger_frames": 505,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.01445790031206161,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.02574257425742574,
+      "median_shape_score": 0.8342730530913346,
+      "centroid_std": 7.697995505477197,
+      "boundary_center_std": 7.921209638065231
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "594797eee2d5",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "594797eee2d5",
+      "total_frames": 34929,
+      "basic_trigger_frames": 509,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.014572418334335367,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.025540275049115914,
+      "median_shape_score": 0.8342730530913346,
+      "centroid_std": 7.697995505477197,
+      "boundary_center_std": 7.921209638065231
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "80967518dfd2",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "80967518dfd2",
+      "total_frames": 34929,
+      "basic_trigger_frames": 511,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.014629677345472243,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.025440313111545987,
+      "median_shape_score": 0.8997646395339436,
+      "centroid_std": 7.784467607385034,
+      "boundary_center_std": 8.001109390533912
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "43854b2277d8",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "43854b2277d8",
+      "total_frames": 34929,
+      "basic_trigger_frames": 514,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.01471556586217756,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.02529182879377432,
+      "median_shape_score": 0.8997646395339436,
+      "centroid_std": 7.784467607385034,
+      "boundary_center_std": 8.001109390533912
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "f0d9dac57d95",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "f0d9dac57d95",
+      "total_frames": 34929,
+      "basic_trigger_frames": 1114,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.03189326920324086,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.011669658886894075,
+      "median_shape_score": 0.8342730530913346,
+      "centroid_std": 7.697995505477197,
+      "boundary_center_std": 7.921209638065231
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "29b5b96e4218",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "29b5b96e4218",
+      "total_frames": 34929,
+      "basic_trigger_frames": 1131,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.03237997079790432,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.011494252873563218,
+      "median_shape_score": 0.8342730530913346,
+      "centroid_std": 7.697995505477197,
+      "boundary_center_std": 7.921209638065231
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 6.380535114211578e-05,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "00dff6293073",
+      "total_frames": 47018,
+      "basic_trigger_frames": 3,
+      "good_frames": 0,
+      "basic_trigger_fraction": 6.380535114211578e-05,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "00dff6293073",
+      "total_frames": 34929,
+      "basic_trigger_frames": 1406,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.040253084829225,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.009246088193456615,
+      "median_shape_score": 0.8997646395339436,
+      "centroid_std": 7.784467607385034,
+      "boundary_center_std": 8.001109390533912
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 6.380535114211578e-05,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "43dbd194a31e",
+      "total_frames": 47018,
+      "basic_trigger_frames": 3,
+      "good_frames": 0,
+      "basic_trigger_fraction": 6.380535114211578e-05,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 2
+      },
+      "configuration_id": "43dbd194a31e",
+      "total_frames": 34929,
+      "basic_trigger_frames": 1414,
+      "good_frames": 13,
+      "basic_trigger_fraction": 0.04048212087377251,
+      "good_frame_yield": 0.0003721835723897048,
+      "good_trigger_precision": 0.009193776520509194,
+      "median_shape_score": 0.8997646395339436,
+      "centroid_std": 7.784467607385034,
+      "boundary_center_std": 8.001109390533912
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "25bf4b5b702e",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "25bf4b5b702e",
+      "total_frames": 34929,
+      "basic_trigger_frames": 353,
+      "good_frames": 12,
+      "basic_trigger_fraction": 0.010106215465658907,
+      "good_frame_yield": 0.000343554066821266,
+      "good_trigger_precision": 0.0339943342776204,
+      "median_shape_score": 0.9810986480302325,
+      "centroid_std": 6.645002288519582,
+      "boundary_center_std": 7.614291205066664
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "70b0aa2adaba",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "70b0aa2adaba",
+      "total_frames": 34929,
+      "basic_trigger_frames": 360,
+      "good_frames": 12,
+      "basic_trigger_fraction": 0.01030662200463798,
+      "good_frame_yield": 0.000343554066821266,
+      "good_trigger_precision": 0.03333333333333333,
+      "median_shape_score": 0.9810986480302325,
+      "centroid_std": 6.645002288519582,
+      "boundary_center_std": 7.614291205066664
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "5fe09b98d990",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "5fe09b98d990",
+      "total_frames": 34929,
+      "basic_trigger_frames": 391,
+      "good_frames": 12,
+      "basic_trigger_fraction": 0.011194136677259584,
+      "good_frame_yield": 0.000343554066821266,
+      "good_trigger_precision": 0.030690537084398978,
+      "median_shape_score": 0.9810986480302325,
+      "centroid_std": 6.645002288519582,
+      "boundary_center_std": 7.614291205066664
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "18ed22cd5f20",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "18ed22cd5f20",
+      "total_frames": 34929,
+      "basic_trigger_frames": 492,
+      "good_frames": 12,
+      "basic_trigger_fraction": 0.014085716739671905,
+      "good_frame_yield": 0.000343554066821266,
+      "good_trigger_precision": 0.024390243902439025,
+      "median_shape_score": 0.9810986480302325,
+      "centroid_std": 6.645002288519582,
+      "boundary_center_std": 7.614291205066664
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "a0c647215bc0",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "a0c647215bc0",
+      "total_frames": 34929,
+      "basic_trigger_frames": 235,
+      "good_frames": 11,
+      "basic_trigger_fraction": 0.006727933808583126,
+      "good_frame_yield": 0.00031492456125282715,
+      "good_trigger_precision": 0.04680851063829787,
+      "median_shape_score": 0.9807386363636363,
+      "centroid_std": 5.847875293253145,
+      "boundary_center_std": 6.872510819102264
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "6d4547633021",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "6d4547633021",
+      "total_frames": 34929,
+      "basic_trigger_frames": 235,
+      "good_frames": 11,
+      "basic_trigger_fraction": 0.006727933808583126,
+      "good_frame_yield": 0.00031492456125282715,
+      "good_trigger_precision": 0.04680851063829787,
+      "median_shape_score": 0.9807386363636363,
+      "centroid_std": 5.847875293253145,
+      "boundary_center_std": 6.872510819102264
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "d040af1071ce",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "d040af1071ce",
+      "total_frames": 34929,
+      "basic_trigger_frames": 235,
+      "good_frames": 11,
+      "basic_trigger_fraction": 0.006727933808583126,
+      "good_frame_yield": 0.00031492456125282715,
+      "good_trigger_precision": 0.04680851063829787,
+      "median_shape_score": 0.9807386363636363,
+      "centroid_std": 5.847875293253145,
+      "boundary_center_std": 6.872510819102264
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "33e2ea3e0785",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "33e2ea3e0785",
+      "total_frames": 34929,
+      "basic_trigger_frames": 268,
+      "good_frames": 11,
+      "basic_trigger_fraction": 0.0076727074923416076,
+      "good_frame_yield": 0.00031492456125282715,
+      "good_trigger_precision": 0.041044776119402986,
+      "median_shape_score": 0.9807386363636363,
+      "centroid_std": 5.847875293253145,
+      "boundary_center_std": 6.872510819102264
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "e7a9513c5bcc",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "e7a9513c5bcc",
+      "total_frames": 34929,
+      "basic_trigger_frames": 268,
+      "good_frames": 11,
+      "basic_trigger_fraction": 0.0076727074923416076,
+      "good_frame_yield": 0.00031492456125282715,
+      "good_trigger_precision": 0.041044776119402986,
+      "median_shape_score": 0.9807386363636363,
+      "centroid_std": 5.847875293253145,
+      "boundary_center_std": 6.872510819102264
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "9fccf46b76e3",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "9fccf46b76e3",
+      "total_frames": 34929,
+      "basic_trigger_frames": 266,
+      "good_frames": 10,
+      "basic_trigger_fraction": 0.007615448481204729,
+      "good_frame_yield": 0.00028629505568438836,
+      "good_trigger_precision": 0.03759398496240601,
+      "median_shape_score": 0.9050425047693991,
+      "centroid_std": 7.94603214145317,
+      "boundary_center_std": 7.470609078247905
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "9c6fac3c417d",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "9c6fac3c417d",
+      "total_frames": 34929,
+      "basic_trigger_frames": 266,
+      "good_frames": 10,
+      "basic_trigger_fraction": 0.007615448481204729,
+      "good_frame_yield": 0.00028629505568438836,
+      "good_trigger_precision": 0.03759398496240601,
+      "median_shape_score": 0.9050425047693991,
+      "centroid_std": 7.94603214145317,
+      "boundary_center_std": 7.470609078247905
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "ddd7193fa344",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "ddd7193fa344",
+      "total_frames": 34929,
+      "basic_trigger_frames": 266,
+      "good_frames": 10,
+      "basic_trigger_fraction": 0.007615448481204729,
+      "good_frame_yield": 0.00028629505568438836,
+      "good_trigger_precision": 0.03759398496240601,
+      "median_shape_score": 0.9050425047693991,
+      "centroid_std": 7.94603214145317,
+      "boundary_center_std": 7.470609078247905
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "38200d06b679",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "38200d06b679",
+      "total_frames": 34929,
+      "basic_trigger_frames": 320,
+      "good_frames": 10,
+      "basic_trigger_fraction": 0.009161441781900427,
+      "good_frame_yield": 0.00028629505568438836,
+      "good_trigger_precision": 0.03125,
+      "median_shape_score": 0.9050425047693991,
+      "centroid_std": 7.94603214145317,
+      "boundary_center_std": 7.470609078247905
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "8b7a1f553dd4",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "8b7a1f553dd4",
+      "total_frames": 34929,
+      "basic_trigger_frames": 320,
+      "good_frames": 10,
+      "basic_trigger_fraction": 0.009161441781900427,
+      "good_frame_yield": 0.00028629505568438836,
+      "good_trigger_precision": 0.03125,
+      "median_shape_score": 0.9050425047693991,
+      "centroid_std": 7.94603214145317,
+      "boundary_center_std": 7.470609078247905
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "91748531dc3b",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "91748531dc3b",
+      "total_frames": 34929,
+      "basic_trigger_frames": 404,
+      "good_frames": 10,
+      "basic_trigger_fraction": 0.011566320249649289,
+      "good_frame_yield": 0.00028629505568438836,
+      "good_trigger_precision": 0.024752475247524754,
+      "median_shape_score": 0.9050425047693991,
+      "centroid_std": 7.94603214145317,
+      "boundary_center_std": 7.470609078247905
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "b21bbf6c71ab",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "b21bbf6c71ab",
+      "total_frames": 34929,
+      "basic_trigger_frames": 414,
+      "good_frames": 10,
+      "basic_trigger_fraction": 0.011852615305333677,
+      "good_frame_yield": 0.00028629505568438836,
+      "good_trigger_precision": 0.024154589371980676,
+      "median_shape_score": 0.9050425047693991,
+      "centroid_std": 7.94603214145317,
+      "boundary_center_std": 7.470609078247905
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "6008aafaea8d",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "6008aafaea8d",
+      "total_frames": 34929,
+      "basic_trigger_frames": 423,
+      "good_frames": 10,
+      "basic_trigger_fraction": 0.012110280855449627,
+      "good_frame_yield": 0.00028629505568438836,
+      "good_trigger_precision": 0.02364066193853428,
+      "median_shape_score": 0.9050425047693991,
+      "centroid_std": 7.94603214145317,
+      "boundary_center_std": 7.470609078247905
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "ebcfc551e12f",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 1
+      },
+      "configuration_id": "ebcfc551e12f",
+      "total_frames": 34929,
+      "basic_trigger_frames": 481,
+      "good_frames": 10,
+      "basic_trigger_fraction": 0.013770792178419079,
+      "good_frame_yield": 0.00028629505568438836,
+      "good_trigger_precision": 0.02079002079002079,
+      "median_shape_score": 0.9050425047693991,
+      "centroid_std": 7.94603214145317,
+      "boundary_center_std": 7.470609078247905
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "92a60abe50c4",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "92a60abe50c4",
+      "total_frames": 34929,
+      "basic_trigger_frames": 341,
+      "good_frames": 4,
+      "basic_trigger_fraction": 0.009762661398837642,
+      "good_frame_yield": 0.00011451802227375533,
+      "good_trigger_precision": 0.011730205278592375,
+      "median_shape_score": 0.9871358554828016,
+      "centroid_std": 5.066735769815838,
+      "boundary_center_std": 4.716990566028302
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "4a7296df25dd",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "4a7296df25dd",
+      "total_frames": 34929,
+      "basic_trigger_frames": 347,
+      "good_frames": 4,
+      "basic_trigger_fraction": 0.009934438432248276,
+      "good_frame_yield": 0.00011451802227375533,
+      "good_trigger_precision": 0.011527377521613832,
+      "median_shape_score": 0.9871358554828016,
+      "centroid_std": 5.066735769815838,
+      "boundary_center_std": 4.716990566028302
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "361e1d2f0b22",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "361e1d2f0b22",
+      "total_frames": 34929,
+      "basic_trigger_frames": 388,
+      "good_frames": 4,
+      "basic_trigger_fraction": 0.011108248160554267,
+      "good_frame_yield": 0.00011451802227375533,
+      "good_trigger_precision": 0.010309278350515464,
+      "median_shape_score": 0.9871358554828016,
+      "centroid_std": 5.066735769815838,
+      "boundary_center_std": 4.716990566028302
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "9c5f6f4d2923",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "9c5f6f4d2923",
+      "total_frames": 34929,
+      "basic_trigger_frames": 471,
+      "good_frames": 4,
+      "basic_trigger_fraction": 0.01348449712273469,
+      "good_frame_yield": 0.00011451802227375533,
+      "good_trigger_precision": 0.008492569002123142,
+      "median_shape_score": 0.9871358554828016,
+      "centroid_std": 5.066735769815838,
+      "boundary_center_std": 4.716990566028302
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "b5d5244ed220",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "b5d5244ed220",
+      "total_frames": 34929,
+      "basic_trigger_frames": 228,
+      "good_frames": 3,
+      "basic_trigger_fraction": 0.006527527269604054,
+      "good_frame_yield": 8.58885167053165e-05,
+      "good_trigger_precision": 0.013157894736842105,
+      "median_shape_score": 0.9815733532301887,
+      "centroid_std": 3.4700696917792535,
+      "boundary_center_std": 3.299831645537222
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "255ff08c27f1",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "255ff08c27f1",
+      "total_frames": 34929,
+      "basic_trigger_frames": 228,
+      "good_frames": 3,
+      "basic_trigger_fraction": 0.006527527269604054,
+      "good_frame_yield": 8.58885167053165e-05,
+      "good_trigger_precision": 0.013157894736842105,
+      "median_shape_score": 0.9815733532301887,
+      "centroid_std": 3.4700696917792535,
+      "boundary_center_std": 3.299831645537222
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "d494002be2fc",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "d494002be2fc",
+      "total_frames": 34929,
+      "basic_trigger_frames": 228,
+      "good_frames": 3,
+      "basic_trigger_fraction": 0.006527527269604054,
+      "good_frame_yield": 8.58885167053165e-05,
+      "good_trigger_precision": 0.013157894736842105,
+      "median_shape_score": 0.9815733532301887,
+      "centroid_std": 3.4700696917792535,
+      "boundary_center_std": 3.299831645537222
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "c5f9d4664599",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "c5f9d4664599",
+      "total_frames": 34929,
+      "basic_trigger_frames": 260,
+      "good_frames": 3,
+      "basic_trigger_fraction": 0.007443671447794097,
+      "good_frame_yield": 8.58885167053165e-05,
+      "good_trigger_precision": 0.011538461538461539,
+      "median_shape_score": 0.9815733532301887,
+      "centroid_std": 3.4700696917792535,
+      "boundary_center_std": 3.299831645537222
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "cbed21d9ab26",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 55000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "cbed21d9ab26",
+      "total_frames": 34929,
+      "basic_trigger_frames": 260,
+      "good_frames": 3,
+      "basic_trigger_fraction": 0.007443671447794097,
+      "good_frame_yield": 8.58885167053165e-05,
+      "good_trigger_precision": 0.011538461538461539,
+      "median_shape_score": 0.9815733532301887,
+      "centroid_std": 3.4700696917792535,
+      "boundary_center_std": 3.299831645537222
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "ddc5afe09c63",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "ddc5afe09c63",
+      "total_frames": 34929,
+      "basic_trigger_frames": 199,
+      "good_frames": 2,
+      "basic_trigger_fraction": 0.005697271608119328,
+      "good_frame_yield": 5.725901113687766e-05,
+      "good_trigger_precision": 0.010050251256281407,
+      "median_shape_score": 0.9894071674928208,
+      "centroid_std": 1.761314334867052,
+      "boundary_center_std": 1.5
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "06e3d8fea199",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "06e3d8fea199",
+      "total_frames": 34929,
+      "basic_trigger_frames": 199,
+      "good_frames": 2,
+      "basic_trigger_fraction": 0.005697271608119328,
+      "good_frame_yield": 5.725901113687766e-05,
+      "good_trigger_precision": 0.010050251256281407,
+      "median_shape_score": 0.9894071674928208,
+      "centroid_std": 1.761314334867052,
+      "boundary_center_std": 1.5
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "54a9ae21b69f",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 500000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "54a9ae21b69f",
+      "total_frames": 34929,
+      "basic_trigger_frames": 199,
+      "good_frames": 2,
+      "basic_trigger_fraction": 0.005697271608119328,
+      "good_frame_yield": 5.725901113687766e-05,
+      "good_trigger_precision": 0.010050251256281407,
+      "median_shape_score": 0.9894071674928208,
+      "centroid_std": 1.761314334867052,
+      "boundary_center_std": 1.5
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "4627554e3713",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "4627554e3713",
+      "total_frames": 34929,
+      "basic_trigger_frames": 248,
+      "good_frames": 2,
+      "basic_trigger_fraction": 0.007100117380972831,
+      "good_frame_yield": 5.725901113687766e-05,
+      "good_trigger_precision": 0.008064516129032258,
+      "median_shape_score": 0.9894071674928208,
+      "centroid_std": 1.761314334867052,
+      "boundary_center_std": 1.5
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "6c203fc24898",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 8,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "6c203fc24898",
+      "total_frames": 34929,
+      "basic_trigger_frames": 248,
+      "good_frames": 2,
+      "basic_trigger_fraction": 0.007100117380972831,
+      "good_frame_yield": 5.725901113687766e-05,
+      "good_trigger_precision": 0.008064516129032258,
+      "median_shape_score": 0.9894071674928208,
+      "centroid_std": 1.761314334867052,
+      "boundary_center_std": 1.5
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "ceaeb3cfbff5",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "ceaeb3cfbff5",
+      "total_frames": 34929,
+      "basic_trigger_frames": 327,
+      "good_frames": 2,
+      "basic_trigger_fraction": 0.009361848320879499,
+      "good_frame_yield": 5.725901113687766e-05,
+      "good_trigger_precision": 0.0061162079510703364,
+      "median_shape_score": 0.9894071674928208,
+      "centroid_std": 1.761314334867052,
+      "boundary_center_std": 1.5
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "880019766573",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 4,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "880019766573",
+      "total_frames": 34929,
+      "basic_trigger_frames": 329,
+      "good_frames": 2,
+      "basic_trigger_fraction": 0.009419107332016376,
+      "good_frame_yield": 5.725901113687766e-05,
+      "good_trigger_precision": 0.0060790273556231,
+      "median_shape_score": 0.9894071674928208,
+      "centroid_std": 1.761314334867052,
+      "boundary_center_std": 1.5
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "562aa27d51fe",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 100000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "562aa27d51fe",
+      "total_frames": 34929,
+      "basic_trigger_frames": 385,
+      "good_frames": 2,
+      "basic_trigger_fraction": 0.01102235964384895,
+      "good_frame_yield": 5.725901113687766e-05,
+      "good_trigger_precision": 0.005194805194805195,
+      "median_shape_score": 0.9894071674928208,
+      "centroid_std": 1.761314334867052,
+      "boundary_center_std": 1.5
+    }
+  },
+  {
+    "accepted": true,
+    "false_trigger_fraction": 0.0,
+    "off": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "a0362d0edc14",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0.0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 50000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "a0362d0edc14",
+      "total_frames": 34929,
+      "basic_trigger_frames": 457,
+      "good_frames": 2,
+      "basic_trigger_fraction": 0.013083684044776547,
+      "good_frame_yield": 5.725901113687766e-05,
+      "good_trigger_precision": 0.00437636761487965,
+      "median_shape_score": 0.9894071674928208,
+      "centroid_std": 1.761314334867052,
+      "boundary_center_std": 1.5
+    }
+  }
+]

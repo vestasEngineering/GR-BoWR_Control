@@ -2,5 +2,7 @@
 logs/
 VID_20240405_120134.mp4
 __pycache__/
-
+lism_test/captures
+lism_test/laser_viewer/centroid_studies
 *.mp4
+lism_test/laser_viewer/trigger_sessions/

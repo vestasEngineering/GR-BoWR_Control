@@ -1,0 +1,43 @@
+[
+  {
+    "accepted": true,
+    "off": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "18ed22cd5f20",
+      "total_frames": 47018,
+      "basic_trigger_frames": 0,
+      "good_frames": 0,
+      "basic_trigger_fraction": 0.0,
+      "good_frame_yield": 0.0,
+      "good_trigger_precision": 0,
+      "median_shape_score": null,
+      "centroid_std": null,
+      "boundary_center_std": null
+    },
+    "on": {
+      "configuration": {
+        "threshold": 60000,
+        "minimum_width": 2,
+        "maximum_width": 512,
+        "minimum_integrated_drop": 10000.0,
+        "maximum_gap": 0
+      },
+      "configuration_id": "18ed22cd5f20",
+      "total_frames": 34929,
+      "basic_trigger_frames": 492,
+      "good_frames": 12,
+      "basic_trigger_fraction": 0.014085716739671905,
+      "good_frame_yield": 0.000343554066821266,
+      "good_trigger_precision": 0.024390243902439025,
+      "median_shape_score": 0.9810986480302325,
+      "centroid_std": 6.645002288519582,
+      "boundary_center_std": 7.614291205066664
+    }
+  }
+]

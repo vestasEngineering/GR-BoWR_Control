@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lism-laser-viewer"
+version = "1.0.0"
+description = "Headless live profile viewer and two-stage calibration for USB LISM-PI26xx"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.23"]
+
+[project.scripts]
+lism-laser-viewer = "laser_viewer.cli:main"
+
+[tool.setuptools]
+packages = ["laser_viewer"]
+
+[tool.setuptools.package-data]
+laser_viewer = ["web/*.html"]

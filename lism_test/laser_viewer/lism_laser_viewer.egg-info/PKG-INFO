@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: lism-laser-viewer
+Version: 1.0.0
+Summary: Headless live profile viewer and two-stage calibration for USB LISM-PI26xx
+Requires-Python: >=3.9
+Requires-Dist: numpy>=1.23

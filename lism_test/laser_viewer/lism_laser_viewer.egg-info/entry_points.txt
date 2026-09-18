@@ -1,0 +1,2 @@
+[console_scripts]
+lism-laser-viewer = laser_viewer.cli:main

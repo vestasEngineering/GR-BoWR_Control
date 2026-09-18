@@ -1,0 +1,41 @@
+{
+  "sdk_directory": "../../sdk",
+  "library_path": "../../sdk/libusblismpi2664.so",
+  "cameras": [
+    {
+      "camera_id": "sensor_160155",
+      "serial_number": "160155",
+      "pipe_size": 4194304,
+      "initial_packet_length": 4096,
+      "expected_pixels": 2048,
+      "byte_order": ">u2",
+      "wait_timeout_ms": 3000,
+      "reverse_pixels": true,
+      "steering_role": "top",
+      "millimeters_per_pixel": 0.014,
+      "zero_pixel": 1023.5
+    },
+    {
+      "camera_id": "sensor_160154",
+      "serial_number": "160154",
+      "pipe_size": 4194304,
+      "initial_packet_length": 4096,
+      "expected_pixels": 2048,
+      "byte_order": ">u2",
+      "wait_timeout_ms": 3000,
+      "reverse_pixels": false,
+      "steering_role": "bottom",
+      "millimeters_per_pixel": 0.014,
+      "zero_pixel": 1023.5
+    }
+  ],
+  "steering": {
+    "sensor_separation_mm": 230.0,
+    "maximum_pair_age_us": 2000
+  },
+  "configuration_settle_ms": 150,
+  "configuration_readback_retries": 5,
+  "configuration_readback_retry_ms": 100,
+  "host": "127.0.0.1",
+  "port": 8769
+}
