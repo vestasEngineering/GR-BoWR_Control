@@ -5,13 +5,14 @@ from websocket_server import WebsocketServer
 from serial_server import SerialServer
 from april_tag_detector import AprilTagDetector
 from job_manager import JobManager
+from laser_steering import LaserSteeringService
 from event_logger import EventLogger
 from database_service import DatabaseService
 import asyncio
 import signal
 
 
-class Grlrr():
+class GrBowr():
     def __init__(self):
         self.logger = Logger()
 
@@ -55,6 +56,13 @@ class Grlrr():
             queues=self.qs,
         )
 
+        self.laser_steering = LaserSteeringService(
+            logger=self.logger,
+            queues=self.qs,
+            serial_server=self.ss,
+            hmi_connected=lambda: self.wss.connected,
+        )
+
         self.detector = AprilTagDetector(
             queues=self.qs,
             rtsp_url=(
@@ -63,14 +71,14 @@ class Grlrr():
             ),
         )
 
-        self.logger.log.info("grlrr init")
+        self.logger.log.info("GR-BoWR init")
         self.cmd = 'initialize_robot'
         self.integration_tasks = []
 
         self.event_logger.log(
             "INFO",
             "application_start",
-            "GRLRR application started"
+            "GR-BoWR application started"
         )
         
 
@@ -83,11 +91,18 @@ class Grlrr():
         self.event_logger.log(
             "INFO",
             "application_shutdown",
-            "GRLRR application is shutting down",
+            "GR-BoWR application is shutting down",
         )
 
         if hasattr(self, "loop_task"):
             self.loop_task.cancel()
+
+        try:
+            await self.laser_steering.shutdown()
+        except Exception:
+            self.logger.log.exception(
+                "Laser steering shutdown failed."
+            )
 
         try:
             await self.ss.shutdown()
@@ -157,7 +172,7 @@ class Grlrr():
 
         self.event_loop = asyncio.get_running_loop()
 
-        self.logger.log.info("grlrr setup")
+        self.logger.log.info("GR-BoWR setup")
 
         self.event_loop.create_task(
             self.wss.run()
@@ -169,6 +184,10 @@ class Grlrr():
 
         self.event_loop.create_task(
             self.detector.run()
+        )
+
+        self.event_loop.create_task(
+            self.laser_steering.run()
         )
         
     def get_command(self):

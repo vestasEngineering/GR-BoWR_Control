@@ -1,0 +1,75 @@
+{
+  "enabled": true,
+
+  "cameras": [
+    {
+      "camera_id": "sensor_160155",
+      "serial_number": "160155",
+      "steering_role": "top",
+      "reverse_pixels": true,
+      "millimeters_per_pixel": 0.014,
+      "zero_pixel": 1023.5
+    },
+    {
+      "camera_id": "sensor_160154",
+      "serial_number": "160154",
+      "steering_role": "bottom",
+      "reverse_pixels": false,
+      "millimeters_per_pixel": 0.014,
+      "zero_pixel": 1023.5
+    }
+  ],
+
+  "sensor_settings": {
+    "bias": 282,
+    "gain": 15,
+    "st_high": 9000,
+    "st_low": 100,
+    "edge_delay": 88
+  },
+
+  "detector": {
+    "threshold": 60000,
+    "minimum_width": 2,
+    "maximum_width": 512,
+    "minimum_integrated_drop": 10000,
+    "maximum_gap": 3,
+    "edge_window": 5,
+    "edge_minimum_active": 3,
+    "quantile_low": 0.10,
+    "quantile_high": 0.90,
+    "core_fraction": 0.80,
+    "core_minimum_width": 2,
+    "maximum_center_disagreement": 12,
+    "minimum_active_pixels": 12,
+    "minimum_active_coverage": 0.35,
+    "maximum_internal_gap": 8,
+    "maximum_internal_gap_fraction": 0.25,
+    "minimum_sustained_span": 12
+  },
+
+  "steering": {
+    "sensor_separation_mm": 230.0,
+    "measurement_timeout_ms": 1000
+  },
+
+  "output": {
+    "deadband_deg": 0.02,
+    "min_interval_ms": 20,
+    "keepalive_ms": 100,
+    "worker_silent_timeout_ms": 500
+  },
+
+  "logging": {
+    "directory": "logs/laser_steering",
+    "log_all_updates": false,
+    "max_file_mb": 20,
+    "backup_count": 10
+  },
+
+  "supervisor": {
+    "restart_backoff_s": [1, 2, 5, 10],
+    "status_publish_s": 2.0,
+    "startup_grace_s": 20.0
+  }
+}

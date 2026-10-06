@@ -13,7 +13,8 @@ class Logger():
         return str(Logger.__name__)
 
     def define_log_file(self):
-        return os.path.join("logs", ("gr-towr_" + str(datetime.now().strftime('%Y-%m-%d %H:%M:%S')) + ".log").replace(" ", "_"))
+        os.makedirs("logs", exist_ok=True)
+        return os.path.join("logs", ("grbowr_" + str(datetime.now().strftime('%Y-%m-%d %H:%M:%S')) + ".log").replace(" ", "_"))
 
 
     def configure_logger(self):

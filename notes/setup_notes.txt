@@ -5,17 +5,17 @@
     add "@reboot /path/to/script
 
     for this project:
-    @reboot ./Documents/Projects/grlrr/run.sh >> grlrr.log
+    @reboot ./Documents/Projects/grbowr/run.sh >> grbowr.log
 
 2. In order to use platformio on rpi5 you will need to 
     install / get the packages from the arduino library for the gcc compiler
     paste them into the packages for platformio
 
 
-3. its also important to add the hostname to the avahi config. use grlrr.local
+3. its also important to add the hostname to the avahi config. use grbowr.local
 
 4. there is a crontab that establishes the hotspot config on boot:
-@reboot nmcli device wifi hotspot ssid grlrr2024 password grlrr2024 ifname wlan0
+@reboot nmcli device wifi hotspot ssid grbowr2024 password grbowr2024 ifname wlan0
 
 5. On Ubuntu it is important to tell the network manager to auto connect to the hotspot.
 nmcli con modify Hotspot connection.autoconnect yes

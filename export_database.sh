@@ -2,8 +2,9 @@
 
 set -e
 
-SOURCE_DB="/home/gr-towr/Documents/GR-LRR_Control/grlrr.db"
-EXPORT_DB="/home/gr-towr/Documents/GR-LRR_Control/grlrr-download.db"
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_DB="$APP_DIR/grbowr.db"
+EXPORT_DB="$APP_DIR/grbowr-download.db"
 
 rm -f "$EXPORT_DB"
 

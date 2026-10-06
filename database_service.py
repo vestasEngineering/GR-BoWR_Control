@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from service_db import ServiceDatabaseMixin
 
-DB_FILE = Path(__file__).with_name("grlrr.db")
+DB_FILE = Path(__file__).with_name("grbowr.db")
 
 ACTIVE_JOB_STATES = (
     "READY",
@@ -242,7 +242,7 @@ class DatabaseService(
         )
 
     # ------------------------------------------------------------------
-    # Migration support for your current grlrr.db
+    # Migration support for your current grbowr.db
     # ------------------------------------------------------------------
 
     def _column_names(

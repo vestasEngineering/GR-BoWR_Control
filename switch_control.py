@@ -15,10 +15,10 @@ SWITCH_LINE = 17          # BCM GPIO17
 POLL_S = 0.05
 DEBOUNCE_S = 0.05
 
-APP_DIR = "/home/gr-towr/Documents/GR-LRR_Control"
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_PYTHON = f"{APP_DIR}/.venv/bin/python3"
 MAIN_SCRIPT = f"{APP_DIR}/main.py"
-MAIN_SERVICE = "grlrr-main.service"
+MAIN_SERVICE = "grbowr-main.service"
 
 # =========================
 # State
@@ -92,7 +92,7 @@ def main():
     line = chip.get_line(SWITCH_LINE)
 
     line.request(
-        consumer="grlrr-switch-monitor",
+        consumer="grbowr-switch-monitor",
         type=gpiod.LINE_REQ_DIR_IN,
         flags=gpiod.LINE_REQ_FLAG_BIAS_PULL_UP
     )

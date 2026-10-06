@@ -15,8 +15,8 @@
   },
   "robots": [
     {
-      "id": "GR-LRR",
-      "name": "GR-LRR",
+      "id": "GR-BoWR",
+      "name": "GR-BoWR",
       "channels": 4
     },
     {
@@ -58,7 +58,7 @@
     }
   ],
   "transitions": {
-    "GR-LRR": {
+    "GR-BoWR": {
       "V150": [
         0,
         10,
@@ -130,7 +130,7 @@
     }
   },
   "defaults": {
-    "robot_id": "GR-LRR",
+    "robot_id": "GR-BoWR",
     "blade_id": "V236"
   }
 }

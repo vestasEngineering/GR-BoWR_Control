@@ -49,6 +49,11 @@ class SerialServer:
         # RX rolling buffer for brace-balanced extraction (B)
         self._rx_buf: str = ""
 
+        # Serializes whole-frame UART writes: frames are written in chunks with
+        # awaits between them, and steering frames must never land mid-frame.
+        self._tx_lock = asyncio.Lock()
+        self._steering_tx_failing = False
+
         # Runtime startup requests are queued per serial session only after
         # the H7 publishes runtime_ready.
 
@@ -986,6 +991,58 @@ class SerialServer:
         *,
         chunk_size: int = 32,
         inter_chunk_delay_s: float = 0.006,
+        flush: bool = True,
+    ) -> None:
+        async with self._tx_lock:
+            await self._write_serial_frame_unlocked(
+                raw,
+                chunk_size=chunk_size,
+                inter_chunk_delay_s=inter_chunk_delay_s,
+                flush=flush,
+            )
+
+    async def send_steering(self, msg: dict) -> bool:
+        """
+        Write one steering frame as soon as any in-progress frame finishes.
+        Returns False (frame dropped, never queued) when the H7 runtime is not
+        ready or the port is unavailable.
+
+        No tcdrain: blocking the event loop for the ~5 ms wire time of every
+        frame would cost far more latency than it saves.
+        """
+        mcu = self.mcu
+        if (
+            mcu is None
+            or not getattr(mcu, "is_open", False)
+            or not self.h7_runtime_ready.is_set()
+        ):
+            return False
+
+        try:
+            await self._write_serial_frame(
+                self._encode_line(msg),
+                chunk_size=64,
+                inter_chunk_delay_s=0.003,
+                flush=False,
+            )
+        except (serial.SerialException, serial.SerialTimeoutException) as error:
+            if not self._steering_tx_failing:
+                self.logger.log.warning(
+                    f"Steering serial write failed: {error}"
+                )
+            self._steering_tx_failing = True
+            return False
+
+        self._steering_tx_failing = False
+        return True
+
+    async def _write_serial_frame_unlocked(
+        self,
+        raw: bytes,
+        *,
+        chunk_size: int,
+        inter_chunk_delay_s: float,
+        flush: bool,
     ) -> None:
         """
         Write one newline-delimited JSON frame in bounded chunks.
@@ -1052,4 +1109,5 @@ class SerialServer:
                     inter_chunk_delay_s
                 )
 
-        mcu.flush()
+        if flush:
+            mcu.flush()

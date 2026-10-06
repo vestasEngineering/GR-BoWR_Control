@@ -10,7 +10,7 @@ source .venv/bin/activate
 #    echo "Hotspot already enabled"
 #else
 #    echo "Enabling hotspot..."
-#    nmcli dev wifi hotspot ifname wlan0 ssid grlrr2024 password grlrr2024
+#    nmcli dev wifi hotspot ifname wlan0 ssid grbowr2024 password grbowr2024
 #fi
 
 echo "Starting main app..."

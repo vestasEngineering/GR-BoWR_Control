@@ -1,19 +1,19 @@
 import traceback
 import asyncio
 import signal
-from grlrr import Grlrr
+from grbowr import GrBowr
 
-def setup_signal_handlers(grlrr_instance):
+def setup_signal_handlers(grbowr_instance):
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(
         signal.SIGINT,
-        lambda: asyncio.create_task(grlrr_instance.teardown())
+        lambda: asyncio.create_task(grbowr_instance.teardown())
     )
 
 async def main():
-    grlrr = Grlrr()
-    setup_signal_handlers(grlrr)
-    await grlrr.main()
+    grbowr = GrBowr()
+    setup_signal_handlers(grbowr)
+    await grbowr.main()
 
 if __name__ == "__main__":
     try:

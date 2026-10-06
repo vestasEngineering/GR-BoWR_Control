@@ -1812,8 +1812,8 @@ class ConfigurationDatabaseMixin:
             return
 
         self.upsert_robot_type(
-            robot_id="grlrr-standard",
-            name="GRLRR Standard",
+            robot_id="grbowr-standard",
+            name="GR-BoWR Standard",
             channels=4,
         )
 
@@ -1824,7 +1824,7 @@ class ConfigurationDatabaseMixin:
         )
 
         self.upsert_default_transitions(
-            robot_type_id="grlrr-standard",
+            robot_type_id="grbowr-standard",
             blade_type_id="default-blade",
             values=[
                 0.25,
@@ -1836,7 +1836,7 @@ class ConfigurationDatabaseMixin:
         )
 
         self.save_configuration_state(
-            robot_type_id="grlrr-standard",
+            robot_type_id="grbowr-standard",
             blade_type_id="default-blade",
         )
 
