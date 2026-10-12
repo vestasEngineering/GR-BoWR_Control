@@ -53,6 +53,8 @@ class LaserSteeringService:
         self._sequence = 0
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._tasks: list[asyncio.Task] = []
+        self._stop_task: Optional[asyncio.Task] = None
+        self._stall_restart_requested = False
 
         self.state = "stopped"
         self.error: Optional[str] = None
@@ -99,8 +101,9 @@ class LaserSteeringService:
             self._publish_status()
 
     # ---------------------------------------------------------------- transmit
-    def _offer(self, valid: bool, angle: Optional[float], reason: str) -> None:
-        self._pending = (valid, angle, reason)
+    def _offer(self, valid: bool, angle: Optional[float], reason: str,
+               offset_mm: Optional[float] = None) -> None:
+        self._pending = (valid, angle, reason, offset_mm)
         self._tx_event.set()
 
     async def _tx_loop(self) -> None:
@@ -111,7 +114,7 @@ class LaserSteeringService:
             if pending is None:
                 continue
             self._sequence = (self._sequence + 1) & 0xFFFFFFFF
-            message = encode_steering(self._sequence, pending[0], pending[1])
+            message = encode_steering(self._sequence, pending[0], pending[1], pending[3])
             try:
                 sent = await self.serial_server.send_steering(message)
             except Exception as error:
@@ -130,6 +133,7 @@ class LaserSteeringService:
     async def _watchdog_loop(self) -> None:
         loop = asyncio.get_running_loop()
         silent_s = self.settings.output.worker_silent_timeout_ms / 1000.0
+        stall_s = self.settings.supervisor.stall_restart_s
         keepalive_s = self.settings.output.keepalive_ms / 1000.0
         next_status = loop.time() + self.settings.supervisor.status_publish_s
         while True:
@@ -141,6 +145,8 @@ class LaserSteeringService:
                 reason = "worker_starting"
             elif now - self._last_worker_msg > silent_s:
                 reason = "worker_silent"
+                if now - self._last_worker_msg > stall_s and not self._stall_restart_requested:
+                    self._restart_stalled_worker(self._proc)
             else:
                 reason = None
             if reason is not None and now - self._last_fallback_offer >= keepalive_s:
@@ -151,13 +157,20 @@ class LaserSteeringService:
                 next_status = now + self.settings.supervisor.status_publish_s
                 self._publish_status()
 
+    def _restart_stalled_worker(self, proc) -> None:
+        self._stall_restart_requested = True
+        self.error = "worker stalled"
+        self.logger.log.warning("steering worker produced no output; restarting it")
+        self._stop_task = asyncio.create_task(self._stop_process(proc, graceful=False))
+
     # ------------------------------------------------------------------ worker
     def _handle_worker_message(self, message: dict) -> None:
         kind = message.get("k")
         self._last_worker_msg = asyncio.get_running_loop().time()
         if kind == "steer":
             self.latest_steer = message
-            self._offer(bool(message.get("valid")), message.get("angle"), str(message.get("reason", "none")))
+            self._offer(bool(message.get("valid")), message.get("angle"), str(message.get("reason", "none")),
+                        message.get("offset_mm"))
         elif kind == "status":
             self.worker_status = message
             if message.get("state") == "running":
@@ -217,6 +230,7 @@ class LaserSteeringService:
         loop = asyncio.get_running_loop()
         started = loop.time()
         self.error = None
+        self._stall_restart_requested = False
         self._set_state("starting")
         self._last_worker_msg = None
         self.worker_status = None

@@ -110,14 +110,15 @@ class SendPolicyTests(unittest.TestCase):
 class ProtocolTests(unittest.TestCase):
     def test_wire_format_matches_portenta_spec(self):
         line = json.dumps(encode_steering(7, True, 1.23456), separators=(",", ":"))
-        self.assertEqual(line, '{"action":"steer","seq":7,"angle":1.235,"valid":1}')
+        self.assertEqual(line, '{"action":"steer","seq":7,"angle":1.235,"offset_mm":0.0,"valid":1}')
         lost = json.dumps(encode_steering(8, False, None), separators=(",", ":"))
-        self.assertEqual(lost, '{"action":"steer","seq":8,"angle":0.0,"valid":0}')
+        self.assertEqual(lost, '{"action":"steer","seq":8,"angle":0.0,"offset_mm":0.0,"valid":0}')
         self.assertEqual(encode_steering(9, True, None)["valid"], 0)
 
-    def test_messages_fit_one_chunk(self):
-        for message in (encode_steering(4294967295, True, -12.3456789), encode_steering(4294967295, False, None)):
-            self.assertLess(len(json.dumps(message, separators=(",", ":"))) + 1, 64)
+    def test_messages_fit_two_chunks(self):
+        for message in (encode_steering(4294967295, True, -12.3456789, -11.3456789),
+                        encode_steering(4294967295, False, None)):
+            self.assertLess(len(json.dumps(message, separators=(",", ":"))) + 1, 128)
 
 
 class ConfigTests(unittest.TestCase):

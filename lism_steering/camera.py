@@ -49,6 +49,7 @@ class LismCamera:
             self.serial, self.config.pipe_size, self.config.initial_packet_length
         )
         try:
+            self._check(self.dev.seteptimeout(self.config.endpoint_timeout_ms), "seteptimeout")
             rc, self.packet_length = self.dev.getpacketlength()
             self._check(rc, "getpacketlength")
             pixel_count = self._get_with_retry("getpixelcount")

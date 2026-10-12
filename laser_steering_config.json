@@ -70,6 +70,7 @@
   "supervisor": {
     "restart_backoff_s": [1, 2, 5, 10],
     "status_publish_s": 2.0,
-    "startup_grace_s": 20.0
+    "startup_grace_s": 20.0,
+    "stall_restart_s": 2.0
   }
 }

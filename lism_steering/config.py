@@ -32,6 +32,7 @@ class CameraConfig:
     expected_pixels: int = 2048
     byte_order: str = ">u2"
     wait_timeout_ms: int = 3000
+    endpoint_timeout_ms: int = 1000
 
     def __post_init__(self):
         if not self.camera_id.strip():
@@ -52,6 +53,8 @@ class CameraConfig:
             raise ValueError(f"{self.camera_id}: pipe_size is too small")
         if self.wait_timeout_ms < 1:
             raise ValueError(f"{self.camera_id}: wait_timeout_ms must be positive")
+        if self.endpoint_timeout_ms < 1:
+            raise ValueError(f"{self.camera_id}: endpoint_timeout_ms must be positive")
         if self.byte_order not in (">u2", "<u2"):
             raise ValueError(f"{self.camera_id}: unsupported byte_order")
 
@@ -125,6 +128,7 @@ class SupervisorConfig:
     restart_backoff_s: tuple[float, ...] = (1.0, 2.0, 5.0, 10.0)
     status_publish_s: float = 2.0
     startup_grace_s: float = 20.0
+    stall_restart_s: float = 2.0
 
     def __post_init__(self):
         object.__setattr__(self, "restart_backoff_s", tuple(float(v) for v in self.restart_backoff_s))
@@ -132,6 +136,8 @@ class SupervisorConfig:
             raise ValueError("supervisor.restart_backoff_s must contain positive values")
         if self.status_publish_s <= 0:
             raise ValueError("supervisor.status_publish_s must be positive")
+        if self.stall_restart_s <= 0:
+            raise ValueError("supervisor.stall_restart_s must be positive")
 
 
 @dataclass(frozen=True)

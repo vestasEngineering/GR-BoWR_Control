@@ -118,6 +118,10 @@ class Worker:
                     "k": "steer",
                     "valid": result.valid,
                     "angle": result.angle_degrees,
+                    "offset_mm": (
+                        (result.top_position_mm + result.bottom_position_mm) / 2.0
+                        if result.valid else None
+                    ),
                     "reason": result.reason,
                 })
             if send or self.settings.logging.log_all_updates:

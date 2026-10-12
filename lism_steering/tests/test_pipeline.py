@@ -30,6 +30,7 @@ FAKE_SDK = textwrap.dedent('''
         def getpacketlength(self): return 0, 4096
         def getpixelcount(self, a): return 0, 2048
         def getcfg1(self): return 0, 0
+        def seteptimeout(self, t): return 0
         def setstate(self, a, v): return 0
         def updateparam(self, a): return 0
         def waitforpipecount(self, n, timeout):
@@ -64,6 +65,9 @@ FAKE_SDK = textwrap.dedent('''
 # top is reversed (pixel = 2047 - raw): raw 1047 -> pixel 1000; bottom raw 1100 -> pixel 1100
 CENTERS = "160155:1047,160154:1100"
 EXPECTED_DEG = 0.3488
+STALLED_WORKER = (
+    "import json, time; print(json.dumps({'k': 'status', 'state': 'running'}), flush=True); time.sleep(600)"
+)
 
 
 def write_config(directory: Path) -> Path:
@@ -181,6 +185,30 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(seqs, sorted(set(seqs)))
             await self.service.shutdown()
             await asyncio.wait_for(self.task, 10)
+
+
+class StalledWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_silent_worker_is_killed_and_relaunched(self):
+        real_exec = asyncio.create_subprocess_exec
+        launches = []
+
+        async def launch(*args, **kwargs):
+            launches.append(1)
+            return await real_exec(
+                sys.executable, "-c", STALLED_WORKER,
+                stdin=kwargs["stdin"], stdout=kwargs["stdout"], stderr=kwargs["stderr"],
+            )
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch("asyncio.create_subprocess_exec", launch):
+            serial, queues = FakeSerial(), Queues()
+            service = LaserSteeringService(Log(), queues, serial, lambda: True, write_config(Path(tmp)))
+            task = asyncio.create_task(service.run())
+            await asyncio.sleep(8.0)
+            await service.shutdown()
+            await asyncio.wait_for(task, 15)
+        self.assertGreaterEqual(len(launches), 2)
+        self.assertGreaterEqual(service.restarts, 1)
+        self.assertTrue([m for m in serial.sent if m["valid"] == 0])
 
 
 if __name__ == "__main__":

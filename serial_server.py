@@ -746,6 +746,16 @@ class SerialServer:
 
                     elif (
                         msg_dict.get("type") == "status"
+                        and msg_dict.get("module") == "laser_base"
+                    ):
+                        self.logger.log.info(
+                            "Laser base mode: "
+                            f"status={msg_dict.get('status')} "
+                            f"reason={msg_dict.get('reason')}"
+                        )
+
+                    elif (
+                        msg_dict.get("type") == "status"
                         and msg_dict.get("module") == "runtime"
                         and msg_dict.get("status") == "runtime_ready"
                     ):
